@@ -31,6 +31,57 @@
 (run 20 (c-in x y r c-out)
      (full-addero c-in x y r c-out))
 
+(define (counter v n)
+  (disj2
+   (== v n)                            ;; First goal, first search branch.
+   (disj2                              ;; Second goal, second search branch.
+    (== v (add1 n))                    ;; Third goal, third search branch.
+    (lambda (s)                        ;; Fourth goal, fourth search branch.
+      (lambda ()
+        ((counter v (+ 2 n)) s))))))
+
+
+(run 20 q
+     (counter q 0))
+;; (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19)
+
+(define (counter-1 v n)
+  (disj2
+   (zzz (== v n))
+   (disj2
+    (== v (add1 n))
+    (zzz (counter v (+ 2 n))))))
+
+(run 20 q (counter-1 q 0))
+
+(run 1 q (zzz (== q 5)))
+
+(expand '(zzz (== q 5)))
+
+
+(define (guided-counter guide weights inputs v n)
+  (guide
+   weights
+   inputs
+   (disj-record
+    (== v n) ;; First goal, first search branch.
+    (disj
+     (== v 0)
+     (lambda (s)  ;; Second goal, second search branch.
+       (lambda () ;; Third goal, third search branch, jumps back to first goal.
+         ((counter v (add1 n)) s)))))))
+
+(run 20 q
+     (counter neural-guider weights inputs q 1))
+;; (1 0 2 0 3 0 4 0 5 0 6 0 7 0 8 0 9 0 10 0)
+
+(define (disj-record g0 g1)
+  (list g0 g1))
+
+(define (guide weights inputs ))
+
+
+
 (define (build-num n)
   (cond
    ((odd? n) (cons 1 (build-num (/ (sub1 n) 2))))
@@ -69,7 +120,6 @@
   (fresh (h0 h1 t)
     (== x `(,h0 ,h1 . ,t))))
 
-(run 3 (adder 0 x y z))
 
 (run 10 (q x y)
      (>1o q)
@@ -83,7 +133,3 @@
       (== t '())
       (== x `(,h . ,t))))
 
-(run 10 (x y z)
-     (bito x)
-     (bito y)
-     (bito z))

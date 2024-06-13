@@ -42,6 +42,9 @@
    ((occurs? x v s) #f)
    (else (cons `(,x . ,v) s))))
 
+(define x (var 'x))
+(define y (var 'y))
+(define z (var 'z))
 (extend-s x `(,x) empty-s)
 (extend-s x `(,y) `((,y . ,x)))
 (let ((s `((,z . ,x) (,y . ,z))))
@@ -337,3 +340,19 @@
   (syntax-rules ()
     ((condu (g0 g ...) ...)
      (conda ((once g0) g ...) ...))))
+
+(define-syntax zzz
+  (syntax-rules ()
+    ((zzz g)
+     (lambda (s) (lambda () (g s))))))
+
+(expand '(zzz (== q 5)))
+
+;; Define a simple macro
+(define-syntax my-macro
+  (syntax-rules ()
+    ((my-macro x)
+     (+ x 1))))
+
+;; Now, let's expand the macro
+(expand '(my-macro 10))
