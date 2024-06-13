@@ -1,3 +1,43 @@
+;; Neural Guided Constraint Logic Programming for Neural Architecture Search
+;;
+;; If you're new to relational programming or kanren and want a video overview
+;; (the code demo starts at about 12:40):
+;;
+;; - https://iv.melmac.space/watch?v=RVDCRlW1f1Y
+;;
+;; If you want to follow along and have a hands-on exploration of the code:
+;;
+;; - Install Chez Scheme
+;;   - disj
+;;     - https://www.scheme.com/download/
+;;     - https://formulae.brew.sh/formula/chezscheme
+;; - Install a Scheme plugin for your editor
+;;   - disj
+;;     - VSCode: https://marketplace.visualstudio.com/items?itemName=release-candidate.vscode-scheme-repl
+;;     - Emacs: https://www.travishinkelman.com/getting-started-with-chez-scheme-and-emacs/
+;;     - Vim: https://github.com/sillybun/vim-repl
+
+;; This file will build a version of a relational programming language known as
+;; microKanren, as detailed in this paper:
+;; http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf
+;;
+;; There is a note in the second-to-last paragraph of that paper
+;;
+;;   We hope to implement other search strategies in a similarly straightforwrad
+;;   manner, and perhaps develop a mechanism to change out search strategies
+;;   during the course of a search.
+;;
+;; That is what we're going to do. We're going to extend microKanren to include
+;; a mechanism to change out search strategies during the course of a search.
+;;
+;; The end goal will be to have a kanren implementation with which we can use a
+;; neural network to guide the search, as done in this paper:
+;; https://github.com/xuexue/neuralkanren
+
+;; Let's get started.
+;;
+;; First, some data structures and nomenclature...
+;;
 ;; "state" holds all of the global data that gets passed around in miniKanren. I
 ;; say "global", but we're writing this in a functional style, so it's only
 ;; global in the sense that it gets passed around to every function that needs
