@@ -50,9 +50,12 @@
    (zzz (== v n))
    (disj2
     (== v (add1 n))
-    (zzz (counter v (+ 2 n))))))
+    (zzz (counter-1 v (+ 2 n))))))
 
 (run 20 q (counter-1 q 0))
+
+(disj (== 'x 5) (== 'y 9))
+;; #<procedure at mk.scm:2027>
 
 (run 1 q (zzz (== q 5)))
 

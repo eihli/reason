@@ -489,3 +489,377 @@
 ;;                                           |
 ;; (#(state ((#(0) . 5)) 1) #(state ((#(0) . 5)) 1) #(state ((#(0) . 5)) 1))
  )
+
+;; Transparency
+;;
+;; TODO: This section is superseded by the First-Order section that follows.
+;;
+;; Now the fun part.
+;;
+;; How do we update this code so that the search can be externally driven?
+;;
+;; This is as far as I've cleary thought things through, so it gets fuzzy now.
+;; I'm going to explore.
+;;
+;; What would happen if we updated state to include what basically amounts to a
+;; call stack, and a list of which decisions we made to get where we are? Then
+;; we could condition our future search.
+;;
+;; In the fives and sixes example, what if, instead of alternating 5s and 6s, we
+;; could search the 5s path every 3rd choice? What would the code look like that
+;; could support that?
+;;
+;; Maybe we can start by just data-izing everything, instead of invoking it.
+(define (==-t u v)
+  (lambda (state)
+    `((== ,u ,v) ,state ,(== u v))))
+
+(comment
+ (let ((x (var 0))
+       (y (var 1))
+       (z (var 2)))
+   (let ((subst `((,x . ,y) (,y . 1337))))
+     (let ((state (vector 'state subst 3))
+           (goal (==-t z x)))
+       (list
+        (goal state)
+        ((caddr (goal state)) state)))))
+ ;; (((== #(2) #(0)) #(state ((#(0) . #(1)) (#(1) . 1337)) 3) #<procedure>)
+ ;;  (#(state ((#(2) . 1337) (#(0) . #(1)) (#(1) . 1337)) 3)))
+ )
+
+(define (disj-t goal1 goal2)
+  (lambda (state)
+    `((disj ,goal1 ,goal2)
+      ,state
+      (,disj ,goal1 ,goal2))))
+
+(comment
+ (let ((goal (fresh (lambda (x)
+                      (disj-t
+                       `(==-t x 1)
+                       `(==-t x 2))))))
+   (list
+    (goal empty-state)
+    ((caddr (goal empty-state)) empty-state)))
+ ;; (#(state ((#(0) . 1)) 1) #(state ((#(0) . 2)) 1))
+ ;;
+ ;; There's our stream of two possible valid states. The variable `x' can either be 1 or 2.
+
+ ((fresh (lambda (x)
+           (disj
+            (fresh (lambda (y)
+                     (== x y)))
+            (== x 5))))
+  empty-state)
+ ;; (#(state ((#(0) . #(1))) 2) #(state ((#(0) . 5)) 1))
+ )
+
+;;;; First-Order microKanren
+;;
+;;
+;; I'm going to start afresh below.
+;;
+;; We'll use the knowledge we gained from what we wrote above. But we'll
+;; re-write all of the code to more closely match the FOMR paper. The exception
+;; will be that we're writing this in Scheme and the paper was written in
+;; Racket.
+;;
+;; De-functionalizing the higher-order representation of goals and streams to a first-order implementation of microKanren
+;;
+;; What do we need to de-functionalize?
+;;
+;; The goal constructors, disj, conj, ==, and relate.
+;;
+;; The stream constructors: stream-append-map, stream-append, and zzz (a.k.a
+;; pause in http://minikanren.org/workshop/2019/minikanren19-final2.pdf)
+;;
+;; In FOMR, this is done by defining the above in terms of structs, so that they
+;; can be decomposed with the help of pattern matching. (Mature streams are
+;; represented the same way as higher-order microKanren, a pair of an answer and
+;; a remaining stream.)
+
+;; Common code
+
+;; Since Chez doesn't give us structs...
+(define-syntax defrecord
+  (syntax-rules ()
+    ((_ name name?)
+     (begin
+       (define name (vector 'name))
+       (define (name? datum) (eq? name datum))))
+    ((_ name name? (field set-field) ...)
+     (begin
+       (define (name field ...) (vector 'name field ...))
+       (define (name? datum)
+         (and (vector? datum) (eq? 'name (vector-ref datum 0))))
+       (let ()
+         (define (range-assoc start xs)
+           (let loop ((xs xs) (idx start))
+             (if (null? xs)
+               '()
+               (cons (cons (car xs) idx) (loop (cdr xs) (+ idx 1))))))
+         (define (define-field-getter name rassc)
+           (define idx (cdr (assoc name rassc)))
+           (eval `(define (,name datum) (vector-ref datum ,idx))))
+         (define (define-field-setter name rassc)
+           (define idx (cdr (assoc name rassc)))
+           (eval `(define (,name datum value)
+                    (let ((new (vector-copy datum)))
+                      (vector-set! new ,idx value)
+                      new))))
+         (let ((fns (range-assoc 1 '(field ...))))
+           (begin (define-field-getter 'field fns) ...))
+         (let ((set-fns (range-assoc 1 '(set-field ...))))
+           (begin (define-field-setter 'set-field set-fns) ...)))))
+    ((_ name name? field ...)
+     (begin
+       (define (name field ...) (vector 'name field ...))
+       (define (name? datum)
+         (and (vector? datum) (eq? 'name (vector-ref datum 0))))
+       (let ()
+         (define (range-assoc start xs)
+           (let loop ((xs xs) (idx start))
+             (if (null? xs)
+               '()
+               (cons (cons (car xs) idx) (loop (cdr xs) (+ idx 1))))))
+         (define (define-field-getter name rassc)
+           (define idx (cdr (assoc name rassc)))
+           (eval `(define (,name datum) (vector-ref datum ,idx))))
+         (let ((fns (range-assoc 1 '(field ...))))
+           (begin (define-field-getter 'field fns) ...)))))))
+
+(defrecord var var? var-name var-index)
+(define (var=? v1 v2)
+  (eq? (var-index v1) (var-index v2)))
+;; Only used in reification? Run? Map? (Search FOMR)
+(define initial-var (var #f 0))
+;; TODO: For some reason, FOMR doesn't go the functional route.
+;; fresh is a lot different.
+(define var/fresh
+  (let ((index 0))
+    (lambda (name)
+      (set! index (+ 1 index))
+      (var name index))))
+
+(define (make-var/fresh)
+  (let ((index 0))
+    (lambda (name)
+      (set! index (+ 1 index))
+      (var name index))))
+
+(comment
+ (var/fresh 'bar)
+ (let ((v1 (var 'foo 0))
+       (v2 (var 'bar 1)))
+   (list (var=? v1 v2)
+         (var=? v1 v1)))
+ (let ((foo 1))
+   (set! foo 2)
+   foo)
+ )
+
+(define empty-substitution '())
+(define (walk term substitution)
+  (let ((found (and (var? term)
+                  (assp (lambda (t) (var=? t term)) substitution))))
+    (if found
+        (walk (cdr found) substitution)
+        term)))
+;; TODO: I'm skipping the occurs? check for now.
+(define (extend-substitution var val substitution)
+  `((,var . ,val) . ,substitution))
+
+;; TODO: Can I refactor this FOMR code to be functional? Can state include the
+;; fresh var index?
+(defrecord state state? state-subst state-varid)
+(define empty-state (state empty-substitution 0))
+
+(define (unify v1 v2 substitution)
+  (let ((v1 (walk v1 substitution))
+        (v2 (walk v2 substitution)))
+    (cond
+     ((and (var? v1) (var? v2) (var=? v1 v2))
+      substitution)
+     ((var? v1)
+      (extend-substitution v1 v2 substitution))
+     ((var? v2)
+      (extend-substitution v2 v1 substitution))
+     ((and (pair? v1) (pair? v2))
+      (let ((substitution (unify (car v1) (var v2) substitution)))
+        (and substitution (unify (cdr v1) (cdr v2) substitution))))
+     (else (if (eqv? v1 v2)
+               substitution)))))
+
+(define (unify-state v1 v2 st)
+  (let ((sub (unify v1 v2 (state-subst st))))
+    (and sub (cons (state sub 0) #f))))
+
+(comment
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y))
+       (z (var/fresh 'z)))
+   (let ((subst `((,x . ,y) (,y . 1337))))
+     (let ((before-unify (walk z subst)))
+       (let ((new-subst (unify z x subst)))
+         (list
+          (format #f "Before unify walked value of z: ~a" before-unify)
+          (format #f "After unify walked value of z: ~a" (walk z new-subst)))))))
+
+ ;; ("Before unify walked value of z: #(2)" "After unify walked value of z: 1337")
+ )
+
+;; Reification
+(define (walk* term substitution)
+   (let ((term (walk term substitution)))
+     (if (pair? term)
+         `(,(walk* (car term) substitution) . ,(walk* (cdr term) substitution))
+         term)))
+
+(define (reified-index index)
+  (string->symbol
+   (string-append "_." (number->string index))))
+
+(define (reify term state)
+  (define index -1)
+  (walk* term (let loop ((term term) (substitution (state-subst state)))
+                (define tm (walk term substitution))
+                (cond
+                 ((pair? tm)
+                  (loop (cdr tm) (loop (car tm) substitution)))
+                 ((var? tm)
+                  (set! index (+ 1 index))
+                  (extend-substitution tm (reified-index index) substitution))
+                 (else substitution)))))
+
+(define (reify/initial-var state)
+  (reify initial-var state))
+
+(comment
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y))
+       (z (var/fresh 'z)))
+   (let ((state (state `((,initial-var . ,(list x y z)) (,y . (1337 . ,x))) 0)))
+     (reify/initial-var state)))
+ ;; (_.0 (1337 . _.0) _.1)
+ )
+
+;; Copied directly from neuralkanren repo
+;;
+;; I'm writing this on a plane without wifi, so I don't have access to the Chez
+;; docs, so I'm hacking this together from the neuralkanren repo and the FOMR
+;; paper.
+;;
+;; One difference, since we're copying from the neuralkanren repo rather than
+;; writing in Racket like the FOMR paper, is that we'll use these defrecord
+;; predicates instead of patern matching.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 1. Data model for logic programming with transparent constraint trees
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Read section "3. Standard biased interleaving search interface" to see how
+;; a typical miniKanren search implementation maps onto this data model.
+
+;; The full constraint tree grammar consists of:
+(defrecord conj conj? conj-c1 conj-c2)
+(defrecord disj disj? disj-c1 disj-c2)
+(defrecord == ==? ==-t1 ==-t2)
+;; * recursive constraints that are currently suspended
+(defrecord zzz zzz? zzz-metadata zzz-wake)
+;; * subtrees that have not yet propagated equality info (stored in a state)
+(defrecord pause pause? pause-state pause-goal)
+;; User-defined relations
+(defrecord relate thunk description)
+;; The interaction system currently only presents constraint trees that are in
+;; disjunctive normal form (DNF), and that have propagated all equality
+;; information, meaning no `pause` or `==` nodes remain.
+(defrecord stream-append stream-append? stream-1 stream-2)
+(defrecord stream-append-map stream-append-map? goal stream)
+(conj (== 'x 5) (== 'y 9))
+
+;; The FOMR paper uses mature, I think maybe because Racket doesn't have a procedure? function. TODO: Pick one for this Chez Scheme implementation and stick with it.
+(define (mature? stream)
+  (or (null? stream) (pair? stream)))
+(define (mature stream)
+  (if (mature? stream)
+      (mature (step stream))))
+
+;; We are going to need two more utilities: step and start. These are small-step
+;; interpreters for streams and goals, respectively.
+;;
+;; These interpreters work together to implement the interleaving search
+;; strategy defined by the higher-order representation.
+(define (step stream)
+  (cond
+   ((stream-append? stream)
+    (let ((s1 (stream-1 stream))
+          (s2 (stream-2 stream)))
+      (let ((s1 (if (mature? s1) s1 (step s1))))
+        (cond
+         ((null? s1) s2)
+         ((pair? s1)
+          (cons (car s1)
+                (stream-append s2 (cdr s1))))
+         (else
+          (stream-append s2 s1))))))
+   ((pause? stream)
+    (start (pause-state stream) (pause-goal stream)))
+   (else stream)))
+
+(comment
+ (let ((s1 '(((a . 0) 1)))
+       (s2 '(((b . 0) 1))))
+   (let ((s3 (stream-append s1 s2)))
+     (list s3 (step (step s3)))))
+ (#(stream-append (((a . 0) 1)) (((b . 0) 1)))
+  (((a . 0) 1) . #(stream-append (((b . 0) 1)) ())))
+
+ (#(stream-append (((a . 0) 1)) (((b . 0) 1)))
+  (((a . 0) 1) . #(stream-append (((b . 0) 1)) ())))
+ )
+
+
+(define (start state goal)
+  (cond
+   ((disj? goal)
+    (let ((g1 (disj-c1 goal))
+          (g2 (disj-c2 goal)))
+      (step (stream-append (pause state g1)
+                           (pause state g2)))))
+   ((==? goal)
+    (unify-state (==-t1 goal) (==-t2 goal) state))))
+
+(comment
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y))
+       (z (var/fresh 'z)))
+   (let ((state (state empty-substitution 0))
+         (goal1 (== x 5))
+         (goal2 (== x y)))
+     (start state (disj goal1 goal2))))
+ ;; #(stream-append #(pause #(state () 0) #(== #(var x 18) #(var y 17)))
+ ;;                 #(pause #(state () 0) #(== #(var x 18) 5)))
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y))
+       (z (var/fresh 'z)))
+   (let ((state (state empty-substitution 0))
+         (goal1 (== x 5))
+         (goal2 (== x y)))
+     (step (start state (disj goal1 goal2)))))
+ ;;  #(stream-append #(pause #(state () 0) #(== #(var x 15) 5))
+ ;;                  #(pause #(state () 0) #(== #(var x 15) #(var y 14))))
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y))
+       (z (var/fresh 'z)))
+   (let ((st (state empty-substitution 0))
+         (goal1 (== x 5))
+         (goal2 (== x y)))
+     (list goal1 (step (step (start st (disj goal1 goal2)))))))
+ ;; (#(== #(var x 39) 5)
+ ;;  (#(state ((#(var x 39) . 5)) 0)
+ ;;   . #(stream-append
+ ;;       #(pause #(state () 0) #(== #(var x 39) #(var y 38)))
+ ;;       #f)))
+
+ )
