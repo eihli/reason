@@ -181,10 +181,10 @@
       (let ((new-subst (unify (car u) (car v) subst)))
         (if new-subst
             (unify (cdr u) (cdr v) new-subst)
-            #f)))
+            empty-substitution)))
      (else (if (eqv? u v)
                subst
-               #f)))))
+               empty-substitution)))))
 
 (comment
  (let ((x (var 0))
@@ -693,7 +693,7 @@
 
 (define (unify-state v1 v2 st)
   (let ((sub (unify v1 v2 (state-subst st))))
-    (and sub (cons (state sub 0) #f))))
+    (and sub (cons (state sub 0) '()))))
 
 (comment
  (let ((x (var/fresh 'x))
@@ -770,12 +770,12 @@
 ;; * subtrees that have not yet propagated equality info (stored in a state)
 (defrecord pause pause? pause-state pause-goal)
 ;; User-defined relations
-(defrecord relate thunk description)
+(defrecord relate relate? relate-thunk relate-description)
 ;; The interaction system currently only presents constraint trees that are in
 ;; disjunctive normal form (DNF), and that have propagated all equality
 ;; information, meaning no `pause` or `==` nodes remain.
-(defrecord stream-append stream-append? stream-1 stream-2)
-(defrecord stream-append-map stream-append-map? goal stream)
+(defrecord stream-append stream-append? stream-append-stream-1 stream-append-stream-2)
+(defrecord stream-append-map stream-append-map? stream-append-map-goal stream-append-map-stream)
 (conj (== 'x 5) (== 'y 9))
 
 ;; The FOMR paper uses mature, I think maybe because Racket doesn't have a procedure? function. TODO: Pick one for this Chez Scheme implementation and stick with it.
@@ -790,22 +790,41 @@
 ;;
 ;; These interpreters work together to implement the interleaving search
 ;; strategy defined by the higher-order representation.
-(define (step stream)
+;;
+;; What does `step' do?
+;;
+;; It evaluates a single thing in our stream. In first-order representation, our
+;; "stream" is an unevaluated description of what we want to do. Our
+;; `stream-append' record is basically a description, the code, saying that we
+;; want to append one stream to another. In higher-order, that would exist as a
+;; head and a lazy tail. In first-order, that exists as a head and a `pause'
+;; record. That's why these two work in unison.
+(define (step record)
   (cond
-   ((stream-append? stream)
-    (let ((s1 (stream-1 stream))
-          (s2 (stream-2 stream)))
-      (let ((s1 (if (mature? s1) s1 (step s1))))
+   ((stream-append? record)
+    (let ((stream-1 (stream-append-stream-1 record))
+          (stream-2 (stream-append-stream-2 record)))
+      (let ((stream-1 (if (mature? stream-1) stream-1 (step stream-1))))
         (cond
-         ((null? s1) s2)
-         ((pair? s1)
-          (cons (car s1)
-                (stream-append s2 (cdr s1))))
+         ((null? stream-1) stream-2)
+         ((pair? stream-1)
+          (cons (car stream-1)
+                (stream-append stream-2 (cdr stream-1))))
          (else
-          (stream-append s2 s1))))))
-   ((pause? stream)
-    (start (pause-state stream) (pause-goal stream)))
-   (else stream)))
+          (stream-append stream-2 stream-1))))))
+   ((stream-append-map? stream)
+    (let ((goal (stream-append-map-goal stream))
+          (stream (stream-append-map-stream stream)))
+      (let ((stream (if (mature? stream) stream (step stream))))
+        (cond
+         ((null? stream) '())
+         ((pair? stream)
+          (step (stream-append (pause (car stream) goal)
+                               (stream-append-map goal (cdr stream)))))
+         (else (stream-append-map goal stream))))))
+   ((pause? record)
+    (start (pause-state record) (pause-goal record)))
+   (else record)))
 
 (comment
  (let ((s1 '(((a . 0) 1)))
@@ -823,10 +842,13 @@
 (define (start state goal)
   (cond
    ((disj? goal)
-    (let ((g1 (disj-c1 goal))
-          (g2 (disj-c2 goal)))
-      (step (stream-append (pause state g1)
-                           (pause state g2)))))
+    (step (stream-append (pause state (disj-c1 goal))
+                         (pause state (disj-c2 goal)))))
+   ((conj? goal)
+    (step (stream-append-map (pause state (conj-c1 goal))
+                             (conj-c2 goal))))
+   ((relate? goal)
+    (pause state ((relate-thunk goal))))
    ((==? goal)
     (unify-state (==-t1 goal) (==-t2 goal) state))))
 
@@ -838,6 +860,7 @@
          (goal1 (== x 5))
          (goal2 (== x y)))
      (start state (disj goal1 goal2))))
+ ;; (#(state ((#(var x 12) . 5)) 0))
  ;; #(stream-append #(pause #(state () 0) #(== #(var x 18) #(var y 17)))
  ;;                 #(pause #(state () 0) #(== #(var x 18) 5)))
  (let ((x (var/fresh 'x))
@@ -855,11 +878,82 @@
    (let ((st (state empty-substitution 0))
          (goal1 (== x 5))
          (goal2 (== x y)))
-     (list goal1 (step (step (start st (disj goal1 goal2)))))))
+     (step (step (start st (disj goal1 goal2))))))
+
  ;; (#(== #(var x 39) 5)
  ;;  (#(state ((#(var x 39) . 5)) 0)
  ;;   . #(stream-append
  ;;       #(pause #(state () 0) #(== #(var x 39) #(var y 38)))
  ;;       #f)))
+
+
+
+ (let ((var/fresh (make-var/fresh)))
+   (let ((x (var/fresh 'x))
+         (y (var/fresh 'y))
+         (z (var/fresh 'z)))
+     (let ((goal1 (== x 5))
+           (goal2 (disj
+                   (== x y)
+                   (== 1337 y))))
+       (let ((goal3 (conj goal2 (== z 42))))
+         (step (start (state empty-substitution 0) goal1))))))
+
+ ;; (#(state ((#(var x 3) . 5)) 0))
+ )
+
+(define (bit-xoro in-1 in-2 out)
+  (disj
+   (conj (== in-1 0) (conj (== in-2 0) (== out 0)))
+   (disj
+    (conj (== in-1 1) (conj (== in-2 0) (== out 1)))
+    (disj
+     (conj (== in-1 0) (conj (== in-2 1) (== out 1)))
+     (conj (== in-1 1) (conj (== in-2 1) (== out 0)))))))
+
+(comment
+ (let ((var/fresh (make-var/fresh)))
+   (let ((x (var/fresh 'x))
+         (y (var/fresh 'y))
+         (z (var/fresh 'z)))
+     (let ((goal1 (bit-xoro x y z))
+           (state (state empty-substitution 0)))
+       (start state (step (start state goal1))))))
+
+ #(stream-append
+   #(stream-append-map
+     #(pause #(state () 0)
+             #(== #(var x 3) 0))
+     #(conj #(== #(var y 2) 0)
+            #(== #(var z 1) 0)))
+   #(stream-append
+     #(pause #(state () 0)
+             #(disj #(conj #(== #(var x 3) 0)
+                           #(conj #(== #(var y 2) 1)
+                                  #(== #(var z 1) 1)))
+                    #(conj #(== #(var x 3) 1)
+                           #(conj #(== #(var y 2) 1)
+                                  #(== #(var z 1) 0)))))
+     #(stream-append-map #(pause #(state () 0)
+                                 #(== #(var x 3) 1))
+                         #(conj #(== #(var y 2) 0)
+                                #(== #(var z 1) 1)))))
+ ;; #(stream-append
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(disj #(conj #(== #(var x 3) 1)
+ ;;                   #(conj #(== #(var y 2) 0)
+ ;;                          #(== #(var z 1) 1)))
+ ;;            #(disj #(conj #(== #(var x 3) 0)
+ ;;                          #(conj #(== #(var y 2) 1)
+ ;;                                 #(== #(var z 1) 1)))
+ ;;                   #(conj #(== #(var x 3) 1)
+ ;;                          #(conj #(== #(var y 2) 1)
+ ;;                                 #(== #(var z 1) 0))))))
+ ;;   #(stream-append-map
+ ;;     #(pause #(state () 0)
+ ;;             #(== #(var x 3) 0))
+ ;;     #(conj #(== #(var y 2) 0)
+ ;;            #(== #(var z 1) 0))))
 
  )
