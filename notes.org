@@ -1,0 +1,143 @@
+#+title: Neural Network Guided Synthesis
+
+* Abstract
+
+Synthesizing programs using example input/outputs is a classic problem in artificial intelligence.
+
+I'm going to adapt the program synthesis methods presented by Lisa Zhang et al. Instead of using a neural network to guide the synthesis of Lisp programs, I'm going to use a neural network to guide the synthesis of neural network architectures.
+
+** Resources
+
+- Lisa Zhang's master's thesis: https://web.archive.org/web/20191029085803/http://lisazhang.ca/msc_thesis.pdf
+- Neural Guided Constraint Logic Programming for Program Synthesis: https://arxiv.org/pdf/1809.02840
+
+* Introduction
+
+Synthesis happens with the help of a relational programming language, miniKanren.
+
+The following figure, from the paper, summarizes the relationship between miniKanren and the neural agent.
+
+[[file:resources/figure-1-neural-guided-synthesis-approach.png]]
+
+** What are ~input~, ~output~, and ~candidates~?
+
+I work best when I'm thinking in concrete examples. What exactly are ~input~ and ~output~?
+
+Let's start by looking at what they are when dealing with program synthesis. Then we'll look at what they are when dealing with neural architecture synthesis.
+
+*** Input for program synthesis
+
+Input is a pair of a function's arguments and its output.
+
+For example, imagine an input like this:
+
+#+begin_src elisp
+`(((1 2) (3)) . (1 2 3))
+#+end_src
+
+If you're not familiar with Lisp syntax, parentheses signify lists. That ~.~ in the middle simply means we're creating a "pair" of things. The thing on the left is the arguments to the function we're trying to synthesize. The thing on the right is the output of the function we're trying to synthesize.
+
+Can you think of a function that, when given the two arguments ~(1 2) (3)~ as its input, produces ~(1 2 3)~ as its output?
+
+You can imagine that being the ~append~ function, like below.
+
+#+begin_src elisp
+(append '(1 2) '(3))
+;; Or... given that the arguments are in a list, we have to use `apply`
+(apply 'append `((1 2) (3)))
+#+end_src
+
+What's the point of all this?
+
+Imagine you didn't have ~append~ defined for you. Imagine you want to just specify some input/output examples and have something automatically generate the ~append~ function for you.
+
+That's program synthesis.
+
+*** Input and output for neural architecture synthesis
+
+Input is a pair of a neural network's input dimensions and its output dimensions.
+
+For example, imagine an input like this:
+
+#+begin_example
+`((3 28 28) . (10))
+#+end_example
+
+You can imagine that being the input/output dimensions of an architecture designed for the MNIST dataset.
+
+Imagine you didn't have the architecture defined for you. Imagine you want to just specify some input/output dimensions and have something automatically generate the architecture for you.
+
+That's neural architecture synthesis.
+
+*** Output for program synthesis
+
+The output will be the definition of a function that when passed the given input arguments produces the given output. It won't necessarily be the best definition of the function. There's an infinite number of ways to define ~append~. Whether you decide to continue searching for different versions is orthogonal.
+
+*** Output for neural architecture synthesis
+
+The output will be an architecture that when given an input of the specified dimensions produces an output of specified dimensions. At this point, there's no expectation that the architecture will be good, nor that it will even learn at all.
+
+*** Candidates for program synthesis
+
+A "candidate" is a partial definition of a program.
+
+For example, a partial definition of ~append~ might look like:
+
+#+begin_src elisp
+(lambda (_.0 _.1)
+  (if _.2
+      _.1
+    (cons _.3)))
+#+end_src
+
+~_.n~ represent unexplored branches.
+
+*** Candidates for neural architecture synthesis
+
+A candidate is a partial definition of a neural network architecture.
+
+I'll use a custom domain-specific language to define architectures. The process of compiling this DSL to Python or whatever... that will come later.
+
+#+begin_example
+((3 28 28) _.0 (10))
+#+end_example
+
+That might expand to:
+
+#+begin_example
+((3 28 28) (Flatten) _.0 (10))
+
+# which might expand to:
+((3 28 28) (Flatten) (Linear 768 10) (10))
+
+# or:
+((3 28 28) (Flatten) (Linear 768 _.0) _.1 (10))
+
+# which might expand to:
+((3 28 28) (Flatten) (Linear 768 256) (Linear 256 10) (10))
+
+# And then the search might backtrack and replace the original (Flatten) with something else.
+# etc...
+#+end_example
+
+** How does the neural network learn to guide the search?
+*** Program synthesis search learning
+
+The machine learning agent implements a ~choose_action(state, candidate)~ which chooses candidate partial program to expand. This is a continuous model trainable by backpropagation.
+
+§ 4.3 of Neural Guided Constraint Logic Programming notes:
+
+#+begin_quote
+We note the similarity in the setup to a Reinforcement Learning problem. The candidates can be
+thought of as possible actions, the ML model as the policy, and miniKanren as the non-differentiable
+environment which produces the states or constraints. However, during training we have access to the
+ground-truth optimal action at each step, and therefore use a supervised cross-entropy loss.
+#+end_quote
+
+They use supervised learning, since it's easy to get a ground truth value for program synthesis. We can't do the same for neural architectures, so we'll have to use reinforcement learning.
+
+*** Neural architecture search learning
+
+We'll use the same agent that implements a ~choose_action(state, candidate)~ function, but we'll use reinforcement learning since we don't have a ground truth to train on.
+
+The final score will be the accuracy. Each intermediate decision will have its value assigned by the standard Q-learning algorithm.
