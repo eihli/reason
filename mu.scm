@@ -672,6 +672,17 @@
 
 ;; TODO: Can I refactor this FOMR code to be functional? Can state include the
 ;; fresh var index?
+;;
+;; See section 4.1.1 of FOMR.
+;;
+;;   Without this simplification, a first-order implementation would be burdened
+;;   with managing the functional counter to resolve unbound logic variables.
+;;
+;;   Because we would like to implement many interpreters, this burden would
+;;   multiply, because each interpreter would have to includ support for
+;;   resolving unbound logic variables.
+;;
+;; I don't fully understand what that means.
 (defrecord state state? state-subst state-varid)
 (define empty-state (state empty-substitution 0))
 
@@ -783,6 +794,7 @@
   (or (null? stream) (pair? stream)))
 (define (mature stream)
   (if (mature? stream)
+      stream
       (mature (step stream))))
 
 ;; We are going to need two more utilities: step and start. These are small-step
@@ -800,24 +812,25 @@
 ;; head and a lazy tail. In first-order, that exists as a head and a `pause'
 ;; record. That's why these two work in unison.
 (define (step record)
+  (display record)
   (cond
    ((stream-append? record)
     (let ((stream-1 (stream-append-stream-1 record))
           (stream-2 (stream-append-stream-2 record)))
       (let ((stream-1 (if (mature? stream-1) stream-1 (step stream-1))))
         (cond
-         ((null? stream-1) stream-2)
+         ((not stream-1) stream-2)
          ((pair? stream-1)
           (cons (car stream-1)
                 (stream-append stream-2 (cdr stream-1))))
          (else
           (stream-append stream-2 stream-1))))))
-   ((stream-append-map? stream)
-    (let ((goal (stream-append-map-goal stream))
-          (stream (stream-append-map-stream stream)))
+   ((stream-append-map? record)
+    (let ((goal (stream-append-map-goal record))
+          (stream (stream-append-map-stream record)))
       (let ((stream (if (mature? stream) stream (step stream))))
         (cond
-         ((null? stream) '())
+         ((not stream) #f)
          ((pair? stream)
           (step (stream-append (pause (car stream) goal)
                                (stream-append-map goal (cdr stream)))))
@@ -955,5 +968,88 @@
  ;;             #(== #(var x 3) 0))
  ;;     #(conj #(== #(var y 2) 0)
  ;;            #(== #(var z 1) 0))))
+
+ )
+
+;;;; Recovering miniKanren
+
+(define succeed (== #t #t))
+(define fail (== #f #t))
+
+(define-syntax conj*
+  (syntax-rules ()
+    ((_) succeed)
+    ((_ g) g)
+    ((_ g0 gs ... g-final) (conj (conj* gs ...) g-final))))
+
+(define-syntax disj*
+  (syntax-rules ()
+    ((_) fail)
+    ((_ g) g)
+    ((_ g0 g1 ...) (disj g0 (disj* g1 ...)))))
+
+(define-syntax fresh
+  (syntax-rules ()
+    ((_ (x ...) g0 gs ...)
+     (let ((x (var/fresh 'x)) ...)
+       (conj* g0 gs ...)))))
+
+(define-syntax conde
+  (syntax-rules ()
+    ((_ (g gs ...) (h hs ...) ...)
+     (disj* (conj* g gs ...) (conj* h hs ...) ...))))
+
+(define-syntax query
+  (syntax-rules ()
+    ((_ (x ...) g0 gs ...)
+     (let ((goal (fresh (x ...) (== (list x ...) initial-var) g0 gs ...)))
+       (pause empty-state goal)))))
+
+(comment
+ (query (x)
+        (disj*
+         (== x 5)
+         (== x 6)))
+ ;; #(pause #(state () 0)
+ ;;         #(conj #(== #t #t)
+ ;;                #(disj #(== #(var x 2) 5)
+ ;;                       #(== #(var x 2) 6))))
+ (expand '(query (x)
+           (disj*
+            (== x 5)
+            (== x 6))))
+ (let ((#{goal mqxipzqu9sw6yqslxn1021rib-4}
+        (let ((#{x mqxipzqu9sw6yqslxn1021rib-5}
+               (var/fresh (quote x))))
+          (conj succeed
+                (disj (== #{x mqxipzqu9sw6yqslxn1021rib-5} 5)
+                      (== #{x mqxipzqu9sw6yqslxn1021rib-5} 6))))))
+   (pause empty-state #{goal mqxipzqu9sw6yqslxn1021rib-4}))
+
+ (expand
+  '(conj*
+    (conj*)
+    (disj*
+     (== x 5)
+     (== x 6))))
+
+ )
+
+(define (stream-take n stream)
+  (display stream)
+  (if (eqv? 0 n)
+      '()
+      (let ((stream (mature stream)))
+        (display stream)
+        (if (pair? stream)
+            (cons (car stream) (stream-take (and n (- n 1)) (cdr stream)))
+            '()))))
+
+(comment
+
+ (stream-take 1 (query (x)
+                       (disj*
+                        (== x 5)
+                        (== x 6))))
 
  )
