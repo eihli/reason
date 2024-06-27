@@ -127,7 +127,7 @@
 (define-syntax comment
   (syntax-rules ()
     ((_ . body)
-     (lambda () 'noop))))
+     (begin))))
 
 (comment
  (let ((x (var 0))
@@ -249,7 +249,7 @@
 ;; In the comment code bodies above I've been creating variables with `let` and
 ;; `var` and manually hardcoding and incrementing an identifier number. We
 ;; should really have a function that does that for us.
-(define (fresh f)
+(define (call/fresh f)
   (lambda (state)
     (let ((goal (f (var (state-varid state)))))
       ;; The goal received the new var thanks to us passing it to `f' above.
@@ -260,7 +260,7 @@
       (goal (make-state (state-subst state) (add1 (state-varid state)))))))
 
 (comment
- (let ((goal-fresh (fresh (lambda (x)
+ (let ((goal-fresh (call/fresh (lambda (x)
                             (let ((goal-unify (== x 1)))
                               goal-unify)))))
    (goal-fresh empty-state))
@@ -279,7 +279,7 @@
  ;; updated) as output. I tried to make that clear with the names in this
  ;; comment body. But you'd probably write the above code more like:
 
- ((fresh (lambda (x) (== x 1))) empty-state)
+ ((call/fresh (lambda (x) (== x 1))) empty-state)
  ;; (#(state ((#(0) . 1)) 1))
  )
 
@@ -299,7 +299,7 @@
    (else (cons (car stream1) (stream-append (cdr stream1) stream2)))))
 
 (comment
- ((fresh (lambda (x)
+ ((call/fresh (lambda (x)
            (disj
             (== x 1)
             (== x 2))))
@@ -308,9 +308,9 @@
  ;;
  ;; There's our stream of two possible valid states. The variable `x' can either be 1 or 2.
 
- ((fresh (lambda (x)
+ ((call/fresh (lambda (x)
            (disj
-            (fresh (lambda (y)
+            (call/fresh (lambda (y)
                      (== x y)))
             (== x 5))))
   empty-state)
@@ -328,14 +328,14 @@
    (else (stream-append (goal (car stream)) (stream-append-map goal (cdr stream))))))
 
 (comment
- ((fresh (lambda (x)
+ ((call/fresh (lambda (x)
            (conj
             (== x 5)
             (== x 4))))
   empty-state)
 
- ((fresh (lambda (x)
-           (fresh (lambda (y)
+ ((call/fresh (lambda (x)
+           (call/fresh (lambda (y)
                     (disj
                      (conj
                       (== x 5)
@@ -355,7 +355,7 @@
          (fives x)))
  ;; When you execute the line below, the execution never terminates. You're
  ;; stuck in an infinite loop.
- ((fresh fives) empty-state)
+ ((call/fresh fives) empty-state)
 
  )
 
@@ -381,11 +381,11 @@
              ((fives x) state)))))
  ;; When you execute the line below, the execution never terminates. You're
  ;; stuck in an infinite loop.
- ((fresh fives) empty-state)
+ ((call/fresh fives) empty-state)
  ;; (#(state ((#(0) . 5)) 1) . #<procedure>)
 
 
- (let ((stream ((fresh fives) empty-state)))
+ (let ((stream ((call/fresh fives) empty-state)))
    (list
     (car stream)
     (car ((cdr stream)))
@@ -410,7 +410,7 @@
          (lambda (state)
            (lambda ()
              ((fives x) state)))))
- ((cdr ((fresh fives) empty-state)))
+ ((cdr ((call/fresh fives) empty-state)))
  ;; (#(state ((#(0) . 5)) 1) . #<procedure>)
  )
 
@@ -425,7 +425,7 @@
  (define (fives x)
    (conj (== x 5)
          (zzz (fives x))))
- ((cdr ((fresh fives) empty-state)))
+ ((cdr ((call/fresh fives) empty-state)))
  ;; (#(state ((#(0) . 5)) 1) . #<procedure>)
  ;;
  ;; Clean!
@@ -444,7 +444,7 @@
  (define (fives-and-sixes x)
    (disj (fives x)
          (sixes x)))
- (let ((goal (fresh fives-and-sixes)))
+ (let ((goal (call/fresh fives-and-sixes)))
    (list
     (car (goal empty-state))
     (car ((cdr (goal empty-state))))
@@ -463,6 +463,11 @@
 ;; occasionally alternate and append the car of stream2 to the recursive call.
 ;; This act is called a "binary trampoline".
 (define (stream-append stream1 stream2)
+  (newline)
+  (display "stream-append stream1 and stream2")
+  (display stream1)
+  (display stream2)
+  (newline)
   (cond
    ((null? stream1) stream2)
    ((procedure? stream1) (lambda () (stream-append stream2 (stream1)))) ;; Here's the switcharoo.
@@ -478,7 +483,7 @@
  (define (fives-and-sixes x)
    (disj (fives x)
          (sixes x)))
- (let ((goal (fresh fives-and-sixes)))
+ (let ((goal (call/fresh fives-and-sixes)))
    (list
     (car (goal empty-state))
     (car ((cdr (goal empty-state))))
@@ -535,7 +540,7 @@
       (,disj ,goal1 ,goal2))))
 
 (comment
- (let ((goal (fresh (lambda (x)
+ (let ((goal (call/fresh (lambda (x)
                       (disj-t
                        `(==-t x 1)
                        `(==-t x 2))))))
@@ -546,9 +551,9 @@
  ;;
  ;; There's our stream of two possible valid states. The variable `x' can either be 1 or 2.
 
- ((fresh (lambda (x)
+ ((call/fresh (lambda (x)
            (disj
-            (fresh (lambda (y)
+            (call/fresh (lambda (y)
                      (== x y)))
             (== x 5))))
   empty-state)
@@ -704,7 +709,15 @@
 
 (define (unify-state v1 v2 st)
   (let ((sub (unify v1 v2 (state-subst st))))
-    (and sub (cons (state sub 0) '()))))
+    (and sub (cons (state sub 0) #f))))
+
+(comment
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y)))
+   (unify-state x 1 (car (unify-state x y empty-state))))
+
+ (pair? (unify-state #t #t empty-state))
+ )
 
 (comment
  (let ((x (var/fresh 'x))
@@ -786,12 +799,19 @@
 ;; disjunctive normal form (DNF), and that have propagated all equality
 ;; information, meaning no `pause` or `==` nodes remain.
 (defrecord stream-append stream-append? stream-append-stream-1 stream-append-stream-2)
-(defrecord stream-append-map stream-append-map? stream-append-map-goal stream-append-map-stream)
+(defrecord stream-append-map stream-append-map? stream-append-map-stream stream-append-map-goal)
 (conj (== 'x 5) (== 'y 9))
 
 ;; The FOMR paper uses mature, I think maybe because Racket doesn't have a procedure? function. TODO: Pick one for this Chez Scheme implementation and stick with it.
 (define (mature? stream)
   (or (null? stream) (pair? stream)))
+
+(comment
+ (let ((stream (pause empty-state (== #t #t))))
+   (list (mature? stream)
+         (mature? (step stream))))
+ ;; (#f #t)
+ )
 (define (mature stream)
   (if (mature? stream)
       stream
@@ -812,7 +832,10 @@
 ;; head and a lazy tail. In first-order, that exists as a head and a `pause'
 ;; record. That's why these two work in unison.
 (define (step record)
+  (newline)
+  (display "Stepping through record:")
   (display record)
+  (newline)
   (cond
    ((stream-append? record)
     (let ((stream-1 (stream-append-stream-1 record))
@@ -826,33 +849,50 @@
          (else
           (stream-append stream-2 stream-1))))))
    ((stream-append-map? record)
-    (let ((goal (stream-append-map-goal record))
-          (stream (stream-append-map-stream record)))
+    (let ((stream (stream-append-map-stream record))
+          (goal (stream-append-map-goal record)))
+      (newline)
+      (display "previous stream")
+      (display stream)
       (let ((stream (if (mature? stream) stream (step stream))))
+        (display "next stream")
+        (display stream)
+        (newline)
+        ;;(break)
         (cond
          ((not stream) #f)
          ((pair? stream)
           (step (stream-append (pause (car stream) goal)
-                               (stream-append-map goal (cdr stream)))))
-         (else (stream-append-map goal stream))))))
+                               (stream-append-map (cdr stream) goal))))
+         (else (stream-append-map stream goal))))))
    ((pause? record)
     (start (pause-state record) (pause-goal record)))
    (else record)))
 
 (comment
- (let ((s1 '(((a . 0) 1)))
-       (s2 '(((b . 0) 1))))
-   (let ((s3 (stream-append s1 s2)))
-     (list s3 (step (step s3)))))
- (#(stream-append (((a . 0) 1)) (((b . 0) 1)))
-  (((a . 0) 1) . #(stream-append (((b . 0) 1)) ())))
+ ;; (let ((s1 '(((a . 0) 1)))
+ ;;       (s2 '(((b . 0) 1))))
+ ;;   (let ((s3 (stream-append s1 s2)))
+ ;;     (list s3 (step (step s3)))))
+ ;; (#(stream-append (((a . 0) 1)) (((b . 0) 1)))
+ ;;  (((a . 0) 1) . #(stream-append (((b . 0) 1)) ())))
 
- (#(stream-append (((a . 0) 1)) (((b . 0) 1)))
-  (((a . 0) 1) . #(stream-append (((b . 0) 1)) ())))
+ ;; (#(stream-append (((a . 0) 1)) (((b . 0) 1)))
+ ;;  (((a . 0) 1) . #(stream-append (((b . 0) 1)) ())))
  )
 
+(comment
+ (step (cdr (step (cdr (step (pause empty-state (disj (== #t #t) (== #t #f))))))))
+
+2
+ )
 
 (define (start state goal)
+  (newline)
+  (display "Starting state and goal:")
+  (display state)
+  (display goal)
+  (newline)
   (cond
    ((disj? goal)
     (step (stream-append (pause state (disj-c1 goal))
@@ -924,33 +964,17 @@
      (conj (== in-1 0) (conj (== in-2 1) (== out 1)))
      (conj (== in-1 1) (conj (== in-2 1) (== out 0)))))))
 
+
+
+
 (comment
  (let ((var/fresh (make-var/fresh)))
    (let ((x (var/fresh 'x))
-         (y (var/fresh 'y))
-         (z (var/fresh 'z)))
-     (let ((goal1 (bit-xoro x y z))
+         (y (var/fresh 'y)))
+     (let ((goal1 (bit-xoro x y 0))
            (state (state empty-substitution 0)))
        (start state (step (start state goal1))))))
 
- #(stream-append
-   #(stream-append-map
-     #(pause #(state () 0)
-             #(== #(var x 3) 0))
-     #(conj #(== #(var y 2) 0)
-            #(== #(var z 1) 0)))
-   #(stream-append
-     #(pause #(state () 0)
-             #(disj #(conj #(== #(var x 3) 0)
-                           #(conj #(== #(var y 2) 1)
-                                  #(== #(var z 1) 1)))
-                    #(conj #(== #(var x 3) 1)
-                           #(conj #(== #(var y 2) 1)
-                                  #(== #(var z 1) 0)))))
-     #(stream-append-map #(pause #(state () 0)
-                                 #(== #(var x 3) 1))
-                         #(conj #(== #(var y 2) 0)
-                                #(== #(var z 1) 1)))))
  ;; #(stream-append
  ;;   #(pause
  ;;     #(state () 0)
@@ -971,7 +995,31 @@
 
  )
 
+
+
+
+(define (bit-xoro in-1 in-2 out)
+  (disj
+   (conj (== in-1 0) (conj (== in-2 0) (== out 0)))
+   (disj
+    (conj (== in-1 1) (conj (== in-2 0) (== out 1)))
+    (disj
+     (conj (== in-1 0) (conj (== in-2 1) (== out 1)))
+     (conj (== in-1 1) (conj (== in-2 1) (== out 0)))))))
+
+
 ;;;; Recovering miniKanren
+(define-syntax fresh
+  (syntax-rules ()
+    ((_ (x ...) g0 gs ...)
+     (let ((x call/fresh 'x) ...)
+       (conj* g0 gs ...)))))
+
+(define-syntax define-relation
+  (syntax-rules ()
+    ((_ (name param ...) g ...)
+     (define (name param ...)
+       (relate (lambda () (fresh () g ...)) `(,name name ,param ...))))))
 
 (define succeed (== #t #t))
 (define fail (== #f #t))
@@ -1051,5 +1099,173 @@
                        (disj*
                         (== x 5)
                         (== x 6))))
+
+ )
+
+
+(define-syntax run
+  (syntax-rules ()
+    ((_ n body ...)
+     (map reify/initial-var (stream-take n (querjy body ...))))))
+
+(define-syntax run*
+  (syntax-rules ()
+    ((_ body ...)
+     (run #f body ...))))
+
+(comment
+
+ (define-relation (bit-xoro x y r)
+   (conde
+    ((== 0 x) (== 0 y) (== 0 r))
+    ((== 0 x) (== 1 y) (== 1 r))
+    ((== 1 x) (== 0 y) (== 1 r))
+    ((== 1 x) (== 1 y) (== 0 r))))
+
+ (fresh (x y r)
+   (== r 0)
+   (bit-xoro x y r))
+ ;; #(conj #(== #t #t) #(relate #<procedure> (#<procedure bit-xoro> bit-xoro #(var x 9) #(var y 8) #(var r 7))))
+
+
+ (expand (bit-xoro x y 0))
+ (run* (x y r) (bit-xoro x y 0))
+ ((0 0 _.0) (1 1 _.0))
+
+ (define-relation (bit-ando x y r)
+   (conde
+    ((== 0 x) (== 0 y) (== 0 r))
+    ((== 0 x) (== 1 y) (== 0 r))
+    ((== 1 x) (== 0 y) (== 0 r))
+    ((== 1 x) (== 1 y) (== 1 r))))
+
+ (define-relation (half-addero x y r c)
+   (bit-xoro x y r)
+   (bit-ando x y c))
+
+ (run 8 (x y r c) (half-addero 1 0 r c))
+
+ (define-relation (full-addero c-in x y r c-out)
+   (call/fresh (r0 c0 c1)
+     (half-addero c-in x r0 c0)
+     (half-addero r0 y r c1)
+     (bit-xoro c0 c1 c-out)))
+
+ (run 20 (c-in x y r c-out)
+   (full-addero c-in x y r c-out)))
+
+(define-relation (appendo l s ls)
+  (conde
+   ((== l '()) s)
+   ((fresh (a d r))
+    (== a (car l))
+    (== a (car ls))
+    (== d (cdr l))
+    (== r ls)
+    (appendo d s r))))
+
+(comment
+ (let ((g (query (x y) (disj (== x y) (== x 1)))))
+   (let ((g (step g)))
+     g))
+
+ )
+
+(comment
+
+ (let ((g (query (x y) (disj (== x y) (== x 1)))))
+   g)
+
+ ;; #(pause
+ ;;   #(state () 0)
+ ;;   #(conj
+ ;;     #(== #t #t)
+ ;;     #(disj
+ ;;       #(== #(var x 10) #(var y 9))
+ ;;       #(== #(var x 10) 1))))
+
+ (let ((g (query (x y) (disj (== x y) (== x 1)))))
+   (let ((g (step g)))
+     g))
+
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(disj
+ ;;     #(== #(var x 12) #(var y 11))
+ ;;     #(== #(var x 12) 1)))
+
+ (let ((g (query (x y) (disj (== x y) (== x 1)))))
+   (let ((g (step g)))
+     (let ((g (step g)))
+       g)))
+
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(disj
+ ;;     #(== #(var x 14) #(var y 13))
+ ;;     #(== #(var x 14) 1)))
+
+ (let ((g (query (x y) (disj (== x y) (== x 1)))))
+   (let ((g (step g)))
+     (let ((g (step g)))
+       (step g))))
+
+ (let ((g (query (x y) (appendo x y '(1 2 3)))))
+   g)
+
+ ;; #(pause
+ ;;   #(state () 0)
+ ;;   #(conj
+ ;;     #(== #t #t)
+ ;;     #(relate
+ ;;       #<procedure>
+ ;;       (#<procedure appendo> appendo #(var x 13) #(var y 12) (1 2 3)))))
+
+ (let ((g (query (x y) (appendo x y '(1 2 3)))))
+   (let ((g (step g)))
+     g))
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(relate #<procedure> (#<procedure appendo> appendo #(var x 2) #(var y 1) (1 2 3))))
+
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(relate #<procedure> (#<procedure appendo> appendo #(var x 15) #(var y 14) (1 2 3))))
+
+ (let ((g (query (x y) (appendo x y '(1 2 3)))))
+   (let ((g (step g)))
+     (let ((g (step g)))
+       g)))
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(relate #<procedure> (#<procedure appendo> appendo #(var x 4) #(var y 3) (1 2 3))))
+
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(relate #<procedure> (#<procedure appendo> appendo #(var x 29) #(var y 28) (1 2 3))))
+
+ (let ((g (query (x y) (appendo x y '(1 2 3)))))
+   (let ((g (step g)))
+     (let ((g (step g)))
+       (let ((g (step g)))
+         g))))
+
+ ;; #(stream-append-map
+ ;;   #(pause
+ ;;     #(state () 0)
+ ;;     #(== #t #t))
+ ;;   #(relate #<procedure> (#<procedure appendo> appendo #(var x 31) #(var y 30) (1 2 3))))
 
  )

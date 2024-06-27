@@ -8,6 +8,7 @@
    ((== 1 x) (== 1 y) (== 0 r))))
 
 (run* (x y r) (bit-xoro x y 0))
+  ((0 0 _.0) (1 1 _.0))
 
 (defrel (bit-ando x y r)
   (conde
