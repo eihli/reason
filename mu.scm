@@ -1334,11 +1334,14 @@
 
  )
 
+;; This always returns an immature stream (a pause record).
 (define (prune/goal state goal)
   (let ((prune/term (lambda (t)
                       (walk* t (state-subst state)))))
     (cond
-     ;; A disj containing a failing child will be replaced by the remaining child.
+     ;; Prune the first goal. If it's false, return the prune of the second
+     ;; goal. If it's true, and the second goal prunes to false, then return
+     ;; just the first goal. Otherwise return the original goal.
      ((disj? goal)
       (let ((goal-1 (disj-c1 goal))
             (goal-2 (disj-c2 goal)))
@@ -1346,11 +1349,11 @@
           (cond
            ((not goal-1)
             (prune/goal state goal-2))
-           ((pause? goal-1)
-            (let ((state-2 (prune/goal state goal-2)))
+           (else
+            (let ((goal-2 (prune/goal state goal-2)))
               (cond
-               ((not goal-2) (pause state-1 goal-1))
-               ((pause? goal-2) (pause state (disj goal-1 goal-2))))))))))
+               ((not goal-2) goal-1)
+               (else (pause state goal)))))))))
      ((conj? goal)
       (let ((goal-1 (conj-c1 goal))
             (goal-2 (conj-c2 goal)))
@@ -1381,3 +1384,10 @@
  ;;         #(== #(var x 6) #(var y 5)))
 
  )
+
+;;;;
+;;;; § 5.2 Disjunctive Normal Form
+;;;;
+(define (dnf/stream stream)
+  (let ((push-pause (lambda (stream goal)))
+        )))
