@@ -463,11 +463,6 @@
 ;; occasionally alternate and append the car of stream2 to the recursive call.
 ;; This act is called a "binary trampoline".
 (define (stream-append stream1 stream2)
-  (newline)
-  (display "stream-append stream1 and stream2")
-  (display stream1)
-  (display stream2)
-  (newline)
   (cond
    ((null? stream1) stream2)
    ((procedure? stream1) (lambda () (stream-append stream2 (stream1)))) ;; Here's the switcharoo.
@@ -704,8 +699,7 @@
      ((and (pair? v1) (pair? v2))
       (let ((substitution (unify (car v1) (var v2) substitution)))
         (and substitution (unify (cdr v1) (cdr v2) substitution))))
-     (else (if (eqv? v1 v2)
-               substitution)))))
+     (else (and (eqv? v1 v2) substitution)))))
 
 (define (unify-state v1 v2 st)
   (let ((sub (unify v1 v2 (state-subst st))))
@@ -716,7 +710,10 @@
        (y (var/fresh 'y)))
    (unify-state x 1 (car (unify-state x y empty-state))))
 
+ (unify-state 1 1 empty-state)
+
  (pair? (unify-state #t #t empty-state))
+
  )
 
 (comment
@@ -832,10 +829,6 @@
 ;; head and a lazy tail. In first-order, that exists as a head and a `pause'
 ;; record. That's why these two work in unison.
 (define (step record)
-  (newline)
-  (display "Stepping through record:")
-  (display record)
-  (newline)
   (cond
    ((stream-append? record)
     (let ((stream-1 (stream-append-stream-1 record))
@@ -851,14 +844,7 @@
    ((stream-append-map? record)
     (let ((stream (stream-append-map-stream record))
           (goal (stream-append-map-goal record)))
-      (newline)
-      (display "previous stream")
-      (display stream)
       (let ((stream (if (mature? stream) stream (step stream))))
-        (display "next stream")
-        (display stream)
-        (newline)
-        ;;(break)
         (cond
          ((not stream) #f)
          ((pair? stream)
@@ -888,11 +874,6 @@
  )
 
 (define (start state goal)
-  (newline)
-  (display "Starting state and goal:")
-  (display state)
-  (display goal)
-  (newline)
   (cond
    ((disj? goal)
     (step (stream-append (pause state (disj-c1 goal))
@@ -1084,11 +1065,9 @@
  )
 
 (define (stream-take n stream)
-  (display stream)
   (if (eqv? 0 n)
       '()
       (let ((stream (mature stream)))
-        (display stream)
         (if (pair? stream)
             (cons (car stream) (stream-take (and n (- n 1)) (cdr stream)))
             '()))))
@@ -1214,6 +1193,19 @@
      (let ((g (step g)))
        (step g))))
 
+ (let ((g (query (x y) (disj (== x y) (== x 1)))))
+   (do ((i 0 (+ i 1)))
+       ((>= i 10) (list 1 g))
+     (cond
+      ((pair? g)
+       (display g)
+       (set! g (step (cdr g))))
+      (else (set! g (step g)))))
+   (list 2 g))
+
+ (do ((i 0 (+ i 1)))
+     ((>= i 10)))
+
  (let ((g (query (x y) (appendo x y '(1 2 3)))))
    g)
 
@@ -1267,5 +1259,125 @@
  ;;     #(state () 0)
  ;;     #(== #t #t))
  ;;   #(relate #<procedure> (#<procedure appendo> appendo #(var x 31) #(var y 30) (1 2 3))))
+
+ )
+
+;;;;
+;;;; § 5 Program Transformations
+;;;;
+;;;; § 5.1 Pruning obvious failures
+;;;;
+(define (prune/stream stream)
+  (cond
+   ;; If the first prunes to #f and the second is truthy, return the second.
+   ;; If the first prunes to truthy and the second is #f, return the first.
+   ;; Otherwise, return the stream unchanged.
+   ((stream-append? stream)
+    (let ((stream-1 (stream-append-stream-1 stream))
+          (stream-2 (stream-append-stream-2 stream)))
+      (let ((stream-1 (prune/stream stream-1)))
+        (cond
+         ((not stream-1) stream-2)
+         (else
+          (let ((stream-2 (prune/stream stream-2)))
+            (cond
+             ((not stream-2) stream-1)
+             (else (stream-append stream-1 stream-2)))))))))
+   ;; If the stream prunes to #f, return #f.
+   ;; If the stream prunes to a mature stream with an #f remaining stream,
+   ;;   ignore the #f remaining stream and just return the prune of the state and the goal.
+   ;; If the stream prunes to an immature stream (a pause),
+   ;;   prune the goal. If it's false, return false. Otherwise, it's a pause, return a pause of
+   ;;   the pause's state and a conj of the pauses goal and the bind's goal. TODO: Why this?
+   ((stream-append-map? stream)
+    (let ((stream (stream-append-map-stream stream))
+          (goal (stream-append-map-goal stream)))
+      (let ((stream (prune/stream stream)))
+        (cond
+         ((not stream) #f)
+         ((and (pair? stream) (not (cdr stream)))
+          (prune/goal (car stream) goal))
+         ((pause? stream)
+          (let ((state (pause-state stream))
+                (goal-1 (pause-goal stream)))
+            (let ((goal (prune/goal state goal)))
+              (cond
+               ((not goal) #f)
+               (else
+                (pause state (conj goal-1 goal)))))))
+         (else
+          (let ((goal-1 (prune/goal empty-state goal)))
+            (cond
+             ((not goal-1) #f)
+             (else (bind stream goal)))))))))
+   ;; If it's immature, just prune the mature.
+   ((pause? stream)
+    (prune/goal (pause-state stream) (pause-goal stream)))
+   ;; If it's mature, just prune the tail.
+   ((pair? stream) `(,(car stream) . ,(prune/stream (cdr stream))))
+   ;; Anything else is good-to-go.
+   (else stream)))
+
+(comment
+ (let ((stream (fresh (x y)
+                 (start empty-state (disj (== 2 1) (== x 2))))))
+   (list
+    stream
+    (prune/stream stream)))
+ ;; (#(pause #(state () 0) #(== #(var x 2) 2))
+ ;;  #(pause #(state ((#(var x 2) . 2)) 0) #(== #(var x 2) 2)))
+
+ (let ((stream (fresh (x y)
+                 (start empty-state (disj (== 2 1) (== x 2))))))
+   (step (prune/stream stream)))
+ ;; (#(state ((#(var x 4) . 2)) 0) . #f)
+
+ )
+
+(define (prune/goal state goal)
+  (let ((prune/term (lambda (t)
+                      (walk* t (state-subst state)))))
+    (cond
+     ;; A disj containing a failing child will be replaced by the remaining child.
+     ((disj? goal)
+      (let ((goal-1 (disj-c1 goal))
+            (goal-2 (disj-c2 goal)))
+        (let ((goal-1 (prune/goal state goal-1)))
+          (cond
+           ((not goal-1)
+            (prune/goal state goal-2))
+           ((pause? goal-1)
+            (let ((state-2 (prune/goal state goal-2)))
+              (cond
+               ((not goal-2) (pause state-1 goal-1))
+               ((pause? goal-2) (pause state (disj goal-1 goal-2))))))))))
+     ((conj? goal)
+      (let ((goal-1 (conj-c1 goal))
+            (goal-2 (conj-c2 goal)))
+        (let ((goal-1 (prune/goal state goal-1)))
+          (cond
+           ((not goal-1) #f)
+           ((pause? goal-1)
+            (let ((goal-2 (prune/goal (pause-state goal-1) goal-2)))
+              (cond
+               ((not goal-2) #f)
+               ((pause? goal-2) (pause (pause-state goal-2) (conj goal-1 goal-2))))))))))
+     ((relate? goal)
+      (let ((thunk (relate-thunk goal))
+            (description (relate-description goal)))
+        (pause state (relate thunk (prune/term description)))))
+     ((==? goal)
+      (let ((term-1 (prune/term (==-t1 goal)))
+            (term-2 (prune/term (==-t2 goal))))
+        (let ((stream (unify-state term-1 term-2 state)))
+          (cond
+           ((not stream) #f)
+           ((pair? stream) (pause (car stream) (== term-1 term-2))))))))))
+
+(comment
+ (let ((goal (fresh (x y) (== x y))))
+   (prune/goal empty-state goal))
+ ;; #(pause #(state ((#(var x 6) . #(var y 5))) 0)
+ ;;         #(== #(var x 6) #(var y 5)))
 
  )
