@@ -1388,6 +1388,12 @@
 ;;;;
 ;;;; § 5.2 Disjunctive Normal Form
 ;;;;
+(define (dnf/goal goal)
+  (cond
+   ((conj? goal)
+    (let ((goal-1 (conj-c1 goal))
+          (goal-2 (conj-c2 goal)))
+      ))))
 (define (dnf/stream stream)
   (let ((push-pause (lambda (stream goal)))
         )))

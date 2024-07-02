@@ -62,55 +62,6 @@
 ;;   be modified or decomposed... Our proposal is to use a first-order program
 ;;   representation, where goals and streams are data structures not coupled to
 ;;   any search strategy. Since Chez doesn't give us structs...
-;;
-;; Chez Scheme doesn't give us a `struct'-like data structure, so let's define a
-;; `defrecord' macro that will give us the functionality we need.
-(define-syntax defrecord
-  (syntax-rules ()
-    ((_ name name?)
-     (begin
-       (define name (vector 'name))
-       (define (name? datum) (eq? name datum))))
-    ((_ name name? (field set-field) ...)
-     (begin
-       (define (name field ...) (vector 'name field ...))
-       (define (name? datum)
-         (and (vector? datum) (eq? 'name (vector-ref datum 0))))
-       (let ()
-         (define (range-assoc start xs)
-           (let loop ((xs xs) (idx start))
-             (if (null? xs)
-               '()
-               (cons (cons (car xs) idx) (loop (cdr xs) (+ idx 1))))))
-         (define (define-field-getter name rassc)
-           (define idx (cdr (assoc name rassc)))
-           (eval `(define (,name datum) (vector-ref datum ,idx))))
-         (define (define-field-setter name rassc)
-           (define idx (cdr (assoc name rassc)))
-           (eval `(define (,name datum value)
-                    (let ((new (vector-copy datum)))
-                      (vector-set! new ,idx value)
-                      new))))
-         (let ((fns (range-assoc 1 '(field ...))))
-           (begin (define-field-getter 'field fns) ...))
-         (let ((set-fns (range-assoc 1 '(set-field ...))))
-           (begin (define-field-setter 'set-field set-fns) ...)))))
-    ((_ name name? field ...)
-     (begin
-       (define (name field ...) (vector 'name field ...))
-       (define (name? datum)
-         (and (vector? datum) (eq? 'name (vector-ref datum 0))))
-       (let ()
-         (define (range-assoc start xs)
-           (let loop ((xs xs) (idx start))
-             (if (null? xs)
-               '()
-               (cons (cons (car xs) idx) (loop (cdr xs) (+ idx 1))))))
-         (define (define-field-getter name rassc)
-           (define idx (cdr (assoc name rassc)))
-           (eval `(define (,name datum) (vector-ref datum ,idx))))
-         (let ((fns (range-assoc 1 '(field ...))))
-           (begin (define-field-getter 'field fns) ...)))))))
 
 ;; Throughout this, I'll want to be able to write some code here that I can
 ;; evaluate from my editor but that doesn't get evaluated when this file gets
@@ -120,17 +71,7 @@
     ((_ . body)
      (begin))))
 
-(comment
- (defrecord some-struct some-struct? some-struct-field-1 some-struct-field-2)
- (let ((my-struct (some-struct 'a '(1 2 3))))
-   (list
-    my-struct
-    (some-struct? 'foo)
-    (some-struct? my-struct)))
- ;; (#(some-struct a (1 2 3)) #f #t)
- )
-
-(defrecord var var? var-name var-index)
+(define-structure (var name index))
 
 (define (var=? x1 x2)
   (eqv? (var-index x1) (var-index x2)))

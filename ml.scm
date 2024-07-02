@@ -1,6 +1,46 @@
 (load "mk.scm")
+(load "nm.scm")
+(load "numbers.scm")
 
-(define bit)
+;; architecture : in_dims layers out_dims
+;; layers : layer tail
+;; tail : layer | ε
+;; layer : flatten | linear
+;; flatten : (Flatten in_dim out_dim)
+;; linear : (Linear in_dim out_dim)
+(defrel (architecture in out)
+  (conde
+   (fresh (out-1)
+     ((linear in out-1)))
+   ))
+
+(run 5 (n m p)
+  (== p 2)
+  (*o n m p))
+
+(run 5 q (== q 5))
+
+
+
+(defrel (flatten in out)
+  (== out (apply * in)))
+
+(run 5 (a b)
+  (== a '(3 5))
+  (flatten a `(,b)))
+
+(defrel (some-test in)
+  (conde
+   (fresh (out)
+     (== in out))
+   ))
+
+(run 5 x
+  (conde
+   (fresh (q)
+     (== q 1)
+     (== q x))))
+
 (define (layer l)
   (conde
     ((== `(linear) l))))
