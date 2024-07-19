@@ -300,8 +300,6 @@
     ((conde (g ...) ...)
      (disj (conj g ...) ...))))
 
-(run* q (fresh (x y)  (== `(,x ,y) q)))
-
 ;; TODO: When should you use null? vs nullo?
 ;; Could the below be re-written with nullo?
 ;; What does null? do?

@@ -830,6 +830,7 @@
 ;; head and a lazy tail. In first-order, that exists as a head and a `pause'
 ;; record. That's why these two work in unison.
 (define (step record)
+  (log "record " record)
   (cond
    ((stream-append? record)
     (let ((stream-1 (stream-append-stream-1 record))
@@ -845,7 +846,9 @@
    ((stream-append-map? record)
     (let ((stream (stream-append-map-stream record))
           (goal (stream-append-map-goal record)))
+      (log "stream-append-map stream " stream)
       (let ((stream (if (mature? stream) stream (step stream))))
+        (log "stream " stream)
         (cond
          ((not stream) #f)
          ((pair? stream)
@@ -874,6 +877,7 @@
  )
 
 (define (start state goal)
+  (log "start " state goal)
   (cond
    ((disj? goal)
     (step (stream-append (pause state (disj-c1 goal))
@@ -1003,6 +1007,15 @@
     ((_ (name param ...) g ...)
      (define (name param ...)
        (relate (lambda () (fresh () g ...)) `(,name name ,param ...))))))
+
+(define-syntax define-relation
+  (syntax-rules ()
+    ((_ (name param ...) g ...)
+     (define (name param ...)
+       (relate (lambda () (fresh () g ...)) `(,name name ,param ...))))))
+
+(comment
+ )
 
 (define succeed (== #t #t))
 (define fail (== #f #t))
@@ -1279,7 +1292,7 @@
           (stream-2 (stream-append-stream-2 stream)))
       (let ((stream-1 (prune/stream stream-1)))
         (cond
-         ((not stream-1) stream-2)
+         ((not stream-1) (prune/stream stream-2))
          (else
           (let ((stream-2 (prune/stream stream-2)))
             (cond
@@ -1363,10 +1376,15 @@
           (cond
            ((not goal-1) #f)
            ((pause? goal-1)
-            (let ((goal-2 (prune/goal (pause-state goal-1) goal-2)))
+            (let* ((state (pause-state goal-1))
+                   (goal-1 (pause-goal goal-1))
+                   (goal-2 (prune/goal state goal-2)))
               (cond
                ((not goal-2) #f)
-               ((pause? goal-2) (pause (pause-state goal-2) (conj goal-1 goal-2))))))))))
+               ((pause? goal-2)
+                (let* ((state (pause-state goal-2))
+                       (goal-2 (pause-goal goal-2)))
+                  (pause state (conj goal-1 goal-2)))))))))))
      ((relate? goal)
       (let ((thunk (relate-thunk goal))
             (description (relate-description goal)))
@@ -1375,9 +1393,10 @@
       (let ((term-1 (prune/term (==-t1 goal)))
             (term-2 (prune/term (==-t2 goal))))
         (let ((stream (unify-state term-1 term-2 state)))
+          (log "==? goal " stream)
           (cond
            ((not stream) #f)
-           ((pair? stream) (pause (car stream) (== term-1 term-2))))))))))
+           (else (pause (car stream) (== term-1 term-2))))))))))
 
 (comment
  (let ((goal (fresh (x y) (== x y))))
@@ -1445,9 +1464,7 @@
                 (== y 3))))
      (let ((dnf (dnf/goal goal)))
        dnf)))
- #(disj
-   #(conj #(== #(var x 9) 1) #(== #(var y 8) 3))
-   #(conj #(== #(var x 9) 2) #(== #(var y 8) 3)))
+
  ;; (#(state ((#(var y 4) . 3)
  ;;           (#(var x 5) . 1))
  ;;          0)
@@ -1599,9 +1616,178 @@
      (else (list stream)))))
 
 (comment
- (let ((stream (pause empty-state (== 1 1))))
-   (stream->choices stream))
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y)))
+   (let ((goal (conj
+                (disj (== x 1) (== x 2))
+                (== y 3))))
+     (let ((stream (pause empty-state goal)))
+       stream)))
+
+ ;; #(pause #(state () 0)
+ ;;         #(conj #(disj #(== #(var x 49) 1)
+ ;;                       #(== #(var x 49) 2))
+ ;;                #(== #(var y 48) 3)))
+
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y)))
+   (let ((goal (conj
+                (disj (== x 1) (== x 2))
+                (== y 3))))
+     (let ((stream (pause empty-state goal)))
+       (dnf/stream stream))))
+ ;; #(stream-append
+ ;;   #(pause #(state () 0)
+ ;;           #(conj #(== #(var x 45) 1)
+ ;;                  #(== #(var y 44) 3)))
+ ;;   #(pause #(state () 0)
+ ;;           #(conj #(== #(var x 45) 2)
+ ;;                  #(== #(var y 44) 3))))
+
+
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y)))
+   (let ((goal (conj
+                (disj (== x 1) (== x 2))
+                (== y 3))))
+     (let ((stream (pause empty-state goal)))
+       (prune/stream (dnf/stream stream)))))
+ ;; #(stream-append
+ ;;   #(pause #(state ((#(var y 25) . 3) (#(var x 26) . 1)) 0)
+ ;;           #(conj #(== #(var x 26) 1) #(== #(var y 25) 3)))
+ ;;   #(pause #(state ((#(var y 25) . 3) (#(var x 26) . 2)) 0)
+ ;;           #(conj #(== #(var x 26) 2) #(== #(var y 25) 3))))
+
+ ;; '#s(mplus
+ ;;     #s(pause #s(state ((#s(var y 8) . 3) (#s(var x 7) . 1)) () () ())
+ ;;              #s(conj #s(== #s(var x 7) 1)
+ ;;                      #s(== #s(var y 8) 3)))
+ ;;     #s(pause #s(state ((#s(var y 8) . 3) (#s(var x 7) . 2)) () () ())
+ ;;              #s(conj #s(== #s(var x 7) 2)
+ ;;                      #s(== #s(var y 8) 3))))
+
+
+
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y)))
+   (let ((goal (conj
+                (disj (== x 1) (== x 2))
+                (== y 3))))
+     (let ((stream (pause empty-state goal)))
+       (step (prune/stream (dnf/stream stream))))))
+
+ ;; (#(state ((#(var y 27) . 3) (#(var x 28) . 1)) 0)
+ ;;  . #(stream-append
+ ;;      #(pause #(state ((#(var y 27) . 3) (#(var x 28) . 2)) 0)
+ ;;              #(conj #(== #(var x 28) 2) #(== #(var y 27) 3)))
+ ;;      #(stream-append #(stream-append-map #f #(== #(var y 27) 3)) #f)))
+
+ (let ((x (var/fresh 'x))
+       (y (var/fresh 'y)))
+   (let ((goal (conj
+                (disj (== x 1) (== x 2))
+                (== y 3))))
+     (let ((stream (pause empty-state goal)))
+       (dropf (stream->choices (step (prune/stream (dnf/stream stream)))) state?))))
+
+
+
  )
+
+;; (comment
+;;  (let ((x (var/fresh 'x))
+;;        (y (var/fresh 'y)))
+;;    (let ((goal (conj
+;;                 (disj (== x 1) (== x 2))
+;;                 (== y 3))))
+;;      (let ((stream (pause empty-state goal)))
+;;        (stream->choices stream))))
+;;  (#(pause
+;;     #(state ((#(var y 42) . 3) (#(var x 43) . 1)) 0)
+;;     #(conj
+;;       #(pause #(state ((#(var x 43) . 1)) 0) #(== #(var x 43) 1))
+;;       #(pause #(state ((#(var y 42) . 3) (#(var x 43) . 1)) 0) #(== #(var y 42) 3))))
+;;   #(pause
+;;     #(state ((#(var y 42) . 3) (#(var x 43) . 2)) 0)
+;;     #(conj
+;;       #(pause #(state ((#(var x 43) . 2)) 0) #(== #(var x 43) 2))
+;;       #(pause #(state ((#(var y 42) . 3) (#(var x 43) . 2)) 0) #(== #(var y 42) 3)))))
+
+;;  (#(pause #(state () 0) #(== 1 1)))
+
+;;  )
+
+(define (await ns)
+  (sleep (make-time 'time-duration (inexact->exact ns) 0)))
+
+(define (range start . end)
+  (if (null? end)
+      (range 0 start)
+      (let ((end (car end)))
+        (if (>= start end)
+            '()
+            (cons start (range (add1 start) end))))))
+
+(define (walked-term term state) (walk* term (state-subst state)))
+
+(comment
+ (let ((x (var/fresh 'x)))
+   (let ((state (car (start
+                      empty-state
+                      (== x 1)))))
+     (walked-term x state)))
+
+ (walked-term initial-var empty-state)
+ )
+
+(define (goal->constraints state goal)
+  (cond
+   ((conj? goal)
+    (let ((goal-1 (conj-c1 goal))
+          (goal-2 (conj-c2 goal)))
+      (append (goal->constraints state goal-1) (goal->constraints state goal-2))))
+   ((relate? goal)
+    (let ((description (relate-description goal)))
+      (list (walked-term (cdr description) state))))
+   (else '())))
+
+(comment
+
+ (define-relation (x1 x)
+   (== x 1))
+
+ (let ((x (var/fresh 'x)))
+   (goal->constraints (state `((,x . 1)) 0) (x1 2)))
+ (relate-description (x1 2))
+ )
+
+(define (string-trim str)
+  (let loop ((start 0)
+             (end (- (string-length str) 1)))
+    (cond ((and (<= start end) (char-whitespace? (string-ref str start)))
+           (loop (+ start 1) end))
+          ((and (<= start end) (char-whitespace? (string-ref str end)))
+           (loop start (- end 1)))
+          (else (substring str start (+ end 1))))))
+
+(define (list-replace lst from to pred)
+  (cond
+   ((null? lst) '())
+   (else
+    (if (pred (car lst) from)
+        (cons to (list-replace (cdr lst) from to pred))
+        (cons (car lst) (list-replace (cdr lst) from to pred))))))
+
+(define (string-replace str from to)
+  (list->string (list-replace (string->list str) from to char=?)))
+
+(define (pprint v)        (pretty-print v (current-output-port)))
+(define (pprint/string v) (with-output-to-string (lambda () (pprint v))))
+(define (pprint/margin margin prefix v)
+  (define indent (string-append "\n" margin
+                                (make-string (string-length prefix) #\space)))
+  (define body (string-replace (string-trim (pprint/string v)) "\n" indent))
+  (displayln (string-append margin prefix body)))
 
 (define (explore/stream qvars stream)
   (define margin "| ")
@@ -1609,6 +1795,7 @@
   (define (pp/qvars vs)
     (define (qv-prefix qv) (string-append " " (symbol->string qv) " = "))
     (define qv-prefixes (and qvars (map qv-prefix qvars)))
+    (log "qv-prefixes " qv-prefixes vs)
     (if qv-prefixes
         (for-each (lambda (prefix v) (pp prefix v)) qv-prefixes vs)
         (for-each (lambda (v) (pp " " v)) vs)))
@@ -1617,14 +1804,13 @@
      ((pause? stream)
       (let ((state (pause-state stream))
             (goal (pause-goal stream)))
-        (define cxs (walked-term (goal-constraints state goal) state))
+        (define cxs (walked-term (goal->constraints state goal) state))
         (pp/qvars (walked-term initial-var state))
         (unless (null? cxs)
           (displayln (string-append margin " Constraints:"))
           (for-each (lambda (v) (pp " * " v)) cxs))
         (when (null? cxs)
           (displayln (string-append margin " No constraints")))))))
-
   (let loop ((s (stream->choices stream)) (undo '()))
     (define previous-choice
       (and (pair? undo)
@@ -1637,6 +1823,8 @@
       (read-line) (read-line)
       (loop s undo))
     (define i (read))
+    (log s)
+    (await 5e8)
     (display "\n==========")
     (displayln "==========")
     (unless (= (length results) 0)
@@ -1655,6 +1843,7 @@
             (printf "Choice FAILED! Undo to continue.\n")
             (printf "No more choices available. Undo to continue.\n"))
         (printf "Number of Choices: ~a\n" (length choices)))
+    (log "choices " choices)
     (for-each (lambda (i s)
                 (printf (string-append "\n" margin "Choice ~s:\n") (+ i 1))
                 (print-choice s))
@@ -1681,6 +1870,4 @@
      (explore/stream '(x) (query (x) (disj (== x 1) (== x 2))))))
 
  )
-(let ((x (var/fresh 'x)))
-   (let ((goal (== x 1)))
-     (explore/stream '(x) (query (x) (disj (== x 1) (== x 2))))))
+

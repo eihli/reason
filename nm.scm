@@ -108,10 +108,13 @@
    ((and (not (zero? n)) (even? n)) (cons 0 (build-num (/ n 2))))
    ((zero? n) '())))
 
-(define (range start end)
-  (if (>= start end)
-      '()
-      (cons start (range (add1 start) end))))
+(define (range start . end)
+  (if (null? end)
+      (range 0 start)
+      (let ((end (car end)))
+        (if (>= start end)
+            '()
+            (cons start (range (add1 start) end))))))
 
 (map (lambda (n) (build-num n)) (range 0 8))
 ;; (()
