@@ -1,6 +1,7 @@
 #lang racket/base
 
-(provide run)
+(provide run
+         stream->choices)
 
 (require (prefix-in dispatch: web-server/dispatch)
          (prefix-in dispatch-log: web-server/dispatchers/dispatch-log)
@@ -118,7 +119,7 @@
     ((relate thnk desc) (format "(relate ~a)" (cdr desc)))
     ((== t1 t2) (format "(== ~a ~a)" (serialize-term t1) (serialize-term t2)))))
 
-(define (start req)
+(define (start-server req)
   (let ((choices (serialize-choices
                   (stream->choices
                    (parallel-step
@@ -130,15 +131,15 @@
     (jsexpr:response/jsexpr
      (hash 'choices choices))))
 
-(let ((choices (serialize-choices
-                  (stream->choices
-                   (parallel-step
-                    (pause
-                     empty-state
-                     (fresh (a b)
-                            (== `(,a ,b) initial-var)
-                            (appendo a b '(1 2 3 4)))))))))
-    (hash 'choices choices))
+;; (let ((choices (serialize-choices
+;;                   (stream->choices
+;;                    (parallel-step
+;;                     (pause
+;;                      empty-state
+;;                      (fresh (a b)
+;;                             (== `(,a ,b) initial-var)
+;;                             (appendo a b '(1 2 3 4)))))))))
+;;     (hash 'choices choices))
 
 ;; (let ((choices (serialize-choices
 ;;                 (stream->choices
@@ -306,8 +307,8 @@
 ;; That's what we need for a training run.
 ;; The last line can just be the architecture.
 
-(run* (a b)
-  (appendo a b '(1 2 3 4)))
+;; (run* (a b)
+;;   (appendo a b '(1 2 3 4)))
 
 (define (mature/step step s)
   (if (mature? s) s (mature/step step (step s))))
@@ -394,49 +395,66 @@
     ((_ step n body ...) (stream-take/step
                           (lambda (s) (simplify (step s))) n (simplify (query body ...))))))
 
-(let ((stream (query (a b) (appendo a b '(1 2 3 4)))))
-  (map reify/initial-var (stream-take/step (lambda (s) (simplify (ow-step s))) 4 (simplify stream))))
+;; (let ((stream (query (a b) (appendo a b '(1 2 3 4)))))
+;;   (map reify/initial-var (stream-take/step (lambda (s) (simplify (ow-step s))) 4 (simplify stream))))
 
 ;;;; TODO
 ;; make your serialized choices as brief as explore's
 
-(let ((stream (query (q) (layerso q (build-num 768) (build-num 10)))))
-  (parse-nums (map reify/initial-var (stream-take/step (lambda (s) (simplify (ow-step s))) 3 (simplify stream)))))
+;; (let ((stream (query (q) (layerso q (build-num 768) (build-num 10)))))
+;;   (parse-nums (map reify/initial-var (stream-take/step (lambda (s) (simplify (ow-step s))) 3 (simplify stream)))))
 
-(let ((stream (query (q) (layerso q (build-num 768) (build-num 10)))))
-  (explore ow-step (simplify stream)))
+;; (define (rsstep s)
+;;   (simplify (random-step (simplify (step s)))))
 
-(let ((stream (query (a b) (appendo a b '(1 2 3 4)))))
- (list
-  (serialize-choices (stream->choices (choices (parallel-step stream))))
-  (serialize-choices (stream->choices (choices (parallel-step (parallel-step stream)))))))
+;; (let ((stream (query (q) (layerso q (build-num 8) (build-num 3)))))
+;;   (simple-step (list-ref (stream->choices (simple-step (simple-step stream))) 1)))
+
+;; (map reify/initial-var
+;;      (let ((stream (query (q) (layerso q (build-num 8) (build-num 3)))))
+;;        (let loop ((stream (stream->choices stream))
+;;                   (i 100))
+;;          (let ((cxs (choices stream))
+;;                (rxs (results stream)))
+;;            (cond
+;;              ((null? cxs) rxs)
+;;              ((not (null? rxs))
+;;               (cons rxs (loop (stream->choices (cdr stream)) (- i 1))))
+;;              ((eqv? 0 i) '())
+;;              (else (let ((stream (step (list-ref cxs (random 0 (length cxs))))))
+;;                      (cond
+;;                        ((pair? stream)
+;;                         (cons (car stream) (loop (stream->choices (cdr stream)) (- i 1))))
+;;                        ((null? stream) '())
+;;                        (else
+;;                         (loop (stream->choices stream) (- i 1)))))))))))
+
+;; (let ((stream (query (a b) (appendo a b '(1 2 3 4)))))
+;;  (list
+;;   (serialize-choices (stream->choices (choices (parallel-step stream))))
+;;   (serialize-choices (stream->choices (choices (parallel-step (parallel-step stream)))))))
 
 ;; (run/step-simplify ow-step 2 (a b) (appendo a b '(1 2 3 4)))
-(let ((stream (query (a b) (appendo a b '(1 2 3 4)))))
- (list
-  (serialize-choices (stream->choices (parallel-step stream)))
-  (parallel-step (parallel-step (parallel-step stream)))
-  (serialize-choices (stream->choices (parallel-step (parallel-step (parallel-step stream)))))))
+;; (let ((stream (query (a b) (appendo a b '(1 2 3 4)))))
+;;  (list
+;;   (serialize-choices (stream->choices (parallel-step stream)))
+;;   (parallel-step (parallel-step (parallel-step stream)))
+;;   (serialize-choices (stream->choices (parallel-step (parallel-step (parallel-step stream)))))))
 
 ;; Using parallel-step allows us to expand constraints from both examples
 ;; simultaneously, pruning impossibilities much sooner.
-
-(require racket/trace)
-
-
-(untrace ow-step)
 
 ;; lengtho so we don't run forever.
 (define-relation (lengtho l n)
   (conde
    ((== l '()) (== n '()))
    ((fresh (head tail result)
-      (== `(,head . ,tail) l)
-      (pluso '(1) result n)
-      (lengtho tail result)))))
+           (== `(,head . ,tail) l)
+           (pluso '(1) result n)
+           (lengtho tail result)))))
 
-(run* (a b)
-  (appendo a b '(1 2 3 4)))
+;; (run* (a b)
+;;   (appendo a b '(1 2 3 4)))
 
 ;; (let ((stream (query (q) (layerso q '(0 0 0 1) '(0 0 1)))))
 ;;   (list
@@ -473,19 +491,43 @@
 ;;  (ow-run 1 (q)
 ;;          (layerso q (build-num 768) (build-num 10))))
 
-(with-output-to-file "/tmp/out"
-  (lambda ()
-    (for-each
-     (lambda (arch)
-       (write (car arch))
-       (newline))
-     (parse-nums
-      (run 10 (q)
-           (layerso q (build-num 768) (build-num 10))))))
-  #:exists 'replace)
+;; (with-output-to-file "/tmp/out"
+;;   (lambda ()
+;;     (for-each
+;;      (lambda (arch)
+;;        (write (car arch))
+;;        (newline))
+;;      (parse-nums
+;;       (run 10 (q)
+;;            (layerso q (build-num 768) (build-num 10))))))
+;;   #:exists 'replace)
 
+(define (choose s)
+  (random 0 2))
 
-;; (explore parallel-step (prune/stream (dnf/stream (query (q) (layerso q '(0 1) '(0 1))))))
+(define (reorder s n)
+  (match s
+    ((mplus s1 s2)
+     (if (= n 0)
+         s
+         (mplus s2 s1)))
+    ((pause st g) (pause st g))))
+
+(define (random-step s)
+  (let ((s (simplify s)))
+    (if s (step (reorder s (choose s))) s)))
+
+;; (run*/step random-step (a b) (appendo a b '(1 2 3 4)))
+;; (parse-nums (run/step random-step 50 (q) (layerso q '(0 0 0 1) '(0 0 1))))
+
+(let ((stream (simplify (step (pause empty-state (fresh (a b) (== initial-var `(,a ,b)) (appendo a b '(1 2 3 4))))))))
+  (step stream))
+
+(let ((stream (pause empty-state (fresh (a b) (== initial-var `(,a ,b))
+                                        (disj*
+                                         (== a 1)
+                                         (== a 2))))))
+  (parallel-step stream))
 
 ;; (stream->choices (prune/stream (dnf/stream (query (q)
 ;;                                                   (fresh (x y)
@@ -505,3 +547,100 @@
 ;;  (run 100 (q)
 ;;       (archo q (build-num 2) (build-num 2)))
 ;;  80)
+
+(define-syntax query
+  (syntax-rules ()
+    ((_ (x ...) g0 gs ...)
+     (let ((goal (fresh (x ...) (== (list x ...) initial-var) g0 gs ...)))
+       (pause empty-state goal)))))
+
+;; What is the default `step`?
+;; (define (step s)
+;;   (match s
+;;     ((mplus s1 s2) ...)
+;;     ((bind s g) ...)
+;;     ((pause st g) ...)
+;;     (_            s)))
+;; It interleaves s1 and s2 in the case of mplus.
+;;
+;; But really we can define step however we want.
+;; We could depth-first stream 1.
+;; We could completely ignore stream 1, dropping it, excluding it from results.
+;;
+;; It all depends on what our product requirements are.
+;; Nobody is telling us that we _must_ be a complete search.
+;;
+;; In the case of generating data for a neural architecture search,
+;; is it important that we can backtrack?
+;;
+;; Maybe a simpler alternative it to order the choices and then iterate over all of them.
+(require zeromq)
+
+(define requester (zmq-socket 'pair #:connect "tcp://localhost:5555"))
+
+(define (make-requester)
+  (lambda (s)
+    (let ((out (open-output-string)))
+      (write s out)
+      (zmq-send requester (get-output-string out))
+      (let ((received (zmq-recv-string requester)))
+        (printf "received ~s\n" received)
+        received))))
+
+(let ((requester (make-requester)))
+  (requester '(hello world)))
+
+(let ((out (open-output-string)))
+  (write '(hello world) out)
+  (get-output-string out))
+
+(define (nastep s)
+  (define (decide s)
+    (random 0 2))
+  (match s
+    ((mplus s1 s2)
+     (let ((s1 (if (mature? s1) s1 (nastep s1))))
+       (cond ((not s1) s2)
+             ((pair? s1)
+              (cons (car s1)
+                    (if (= 0 (decide s))
+                        (mplus (cdr s1) s2)
+                        (mplus s2 (cdr s1)))))
+             (else (if (= 0 (decide s))
+                       (mplus s1 s2)
+                       (mplus s2 s1))))))
+    ((bind s g)
+     (let ((s (if (mature? s) s (nastep s))))
+       (cond ((not s) #f)
+             ((pair? s)
+              (nastep (mplus (pause (car s) g)
+                             (bind (cdr s) g))))
+             (else (bind s g)))))
+    ((pause st g) (start st g))
+    (_            s)))
+
+(define (ow-stream-take/step step n qvars s)
+  (if (eqv? 0 n)
+      '()
+      ;; mature is going to make a bunch of decisions, then it's going to be done.
+      ;; each iteration of _this_ recursion will be an entire training sample.
+      ;; the step function that you pass to mature is going to be the neural network
+      (let ((s (mature/step step s)))
+        (if (pair? s)
+            (cons (car s) (ow-stream-take/step step (and n (- n 1)) qvars (cdr s)))
+            '()))))
+
+(define-syntax search
+  (syntax-rules (query)
+    ((_ step n (query (qvars ...) body ...))
+     (begin (printf "Using step procedure: ~s\nExploring query:\n~s\n"
+                    'step '(query (qvars ...) body ...))
+            (map reify/initial-var (ow-stream-take/step step (and n (- n 1)) '(qvars ...) (query (qvars ...) body ...)))))))
+
+(search nastep 10 (query (a b) (appendo a b '(1 2 3 4))))
+
+(write (nastep (simplify (nastep (query (a b) (appendo a b '(1 2 3 4)))))))
+
+
+(let ((stream (pause empty-state (fresh (a b) (== initial-var `(,a ,b)) (appendo a b '(1 2 3 4))))))
+  (serialize-choices (stream->choices (step stream))))

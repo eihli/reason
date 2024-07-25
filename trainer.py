@@ -1,14 +1,25 @@
+import random
+import struct
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data.dataloader import DataLoader
 from torchvision import datasets
 import torchvision.transforms.v2 as transforms
+import zmq
 
-from compiler import parse_architectures, tokenize, sample_architectures
 
-mnist = datasets.MNIST("~/.data", transform=transforms.Compose([transforms.PILToTensor(), transforms.ToDtype(torch.float32, scale=True)]))
+from compiler import parse_architectures, tokenize, sample_architectures, parse_choices
+
+mnist = datasets.MNIST(
+    "~/.data",
+    transform=transforms.Compose(
+        [transforms.PILToTensor(), transforms.ToDtype(torch.float32, scale=True)]
+    ),
+    download=True,
+)
 mnist_dl = DataLoader(mnist, batch_size=10)
+
 
 def train(model):
     losses = []
@@ -24,6 +35,7 @@ def train(model):
                 param -= 0.001 * param.grad
     return losses
 
+
 def run(architectures):
     results = []
     for arch in architectures:
@@ -31,5 +43,39 @@ def run(architectures):
         result = train(model)
         results.append(result)
 
+
 architectures = parse_architectures(tokenize(sample_architectures), 0)
 model = nn.Sequential(nn.Flatten(), *architectures[0])
+
+
+def make_decision(choices):
+    return random.randint(0, len(choices) - 1)
+
+# https://learning-0mq-with-pyzmq.readthedocs.io/en/latest/pyzmq/patterns/pair.html
+def run_server():
+    context = zmq.Context()
+    socket = context.socket(zmq.PAIR)
+    print("Binding to port 5555")
+    socket.bind("tcp://*:5555")
+
+    while True:
+        message = socket.recv()
+        print(f"received message {message}")
+        choices = parse_choices(tokenize(message.decode("utf-8")), 0)
+        print(f"Received choices: {choices}")
+        decision = make_decision(choices)
+        socket.send(struct.pack("!i", decision))
+
+def run_server():
+    context = zmq.Context()
+    socket = context.socket(zmq.PAIR)
+    print("Binding to port 5555")
+    socket.bind("tcp://*:5555")
+
+    while True:
+        message = socket.recv()
+        print(f"received message {message}")
+        socket.send(struct.pack("!i", random.randint(0, 1)))
+
+
+run_server()

@@ -142,6 +142,29 @@ def parse_relu(tokens, i):
     i = expance(tokens, i, R_PAREN)
     return nn.ReLU(), i
 
+
+#### Choices
+def parse_choices(tokens, i):
+    choices = []
+    i = expance(tokens, i, L_PAREN)
+    while i < len(tokens) and check(tokens, i, L_PAREN):
+        choice, i = parse_choice(tokens, i)
+        choices.append(choice)
+    i = expance(tokens, i, R_PAREN)
+    return choices
+
+def parse_choice(tokens, i):
+    i = expance(tokens, i, L_PAREN)
+    while tokens[i] != R_PAREN:
+        i += 1
+    i = expance(tokens, i, R_PAREN)
+    return "some_choice", i
+
+def test_parse_choices():
+    message = "((Linear 1 2) (Linear 2 1))"
+    tokens = tokenize(message)
+    assert len(parse_choices(tokens, 0)) == 2
+
 def demo():
     print(parse_architectures(tokenize(sample_architectures), 0))
 
