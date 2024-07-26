@@ -56,26 +56,9 @@ def run_server():
     context = zmq.Context()
     socket = context.socket(zmq.PAIR)
     print("Binding to port 5555")
-    socket.bind("tcp://*:5555")
-
+    socket.bind("tcp://127.0.0.5:5555")
     while True:
         message = socket.recv()
-        print(f"received message {message}")
-        choices = parse_choices(tokenize(message.decode("utf-8")), 0)
-        print(f"Received choices: {choices}")
-        decision = make_decision(choices)
-        socket.send(struct.pack("!i", decision))
-
-def run_server():
-    context = zmq.Context()
-    socket = context.socket(zmq.PAIR)
-    print("Binding to port 5555")
-    socket.bind("tcp://*:5555")
-
-    while True:
-        message = socket.recv()
-        print(f"received message {message}")
         socket.send(struct.pack("!i", random.randint(0, 1)))
-
 
 run_server()

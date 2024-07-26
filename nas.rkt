@@ -1,7 +1,8 @@
 #lang racket/base
 
 (provide run
-         stream->choices)
+         stream->choices
+         make-nastep)
 
 (require (prefix-in dispatch: web-server/dispatch)
          (prefix-in dispatch-log: web-server/dispatchers/dispatch-log)
@@ -587,37 +588,41 @@
         (printf "received ~s\n" received)
         received))))
 
-(let ((requester (make-requester)))
-  (requester '(hello world)))
-
-(let ((out (open-output-string)))
-  (write '(hello world) out)
-  (get-output-string out))
-
-(define (nastep s)
-  (define (decide s)
-    (random 0 2))
-  (match s
-    ((mplus s1 s2)
-     (let ((s1 (if (mature? s1) s1 (nastep s1))))
-       (cond ((not s1) s2)
-             ((pair? s1)
-              (cons (car s1)
-                    (if (= 0 (decide s))
-                        (mplus (cdr s1) s2)
-                        (mplus s2 (cdr s1)))))
-             (else (if (= 0 (decide s))
-                       (mplus s1 s2)
-                       (mplus s2 s1))))))
-    ((bind s g)
-     (let ((s (if (mature? s) s (nastep s))))
-       (cond ((not s) #f)
-             ((pair? s)
-              (nastep (mplus (pause (car s) g)
-                             (bind (cdr s) g))))
-             (else (bind s g)))))
-    ((pause st g) (start st g))
-    (_            s)))
+(define (make-nastep decide)
+  (define (nastep s)
+    (match s
+      ((mplus s1 s2)
+       (let ((s1 (if (mature? s1) s1 (nastep s1))))
+         (cond ((not s1) s2)
+               ((pair? s1)
+                (cons (car s1)
+                      (if (eqv? 's1 (decide s))
+                          (begin
+                            (println "decided on s1")
+                            (mplus (cdr s1) s2))
+                          (begin
+                            (println "decided on s2")
+                            (mplus s2 (cdr s1))))))
+               (else (if (eqv? 's1 (decide s))
+                         (begin
+                           (println "decided on s1")
+                           (mplus s1 s2))
+                         (begin
+                           (println "decided on s2")
+                           (mplus s2 s1)))))))
+      ((bind s g)
+       (let ((s (if (mature? s) s (nastep s))))
+         (cond ((not s) #f)
+               ((pair? s)
+                (if (eqv? 's1 (decide s))
+                    (nastep (mplus (pause (car s) g)
+                                   (bind (cdr s) g)))
+                    (nastep (mplus (bind (cdr s) g)
+                                   (pause (car s) g)))))
+               (else (bind s g)))))
+      ((pause st g) (start st g))
+      (_            s)))
+  nastep)
 
 (define (ow-stream-take/step step n qvars s)
   (if (eqv? 0 n)
@@ -636,11 +641,3 @@
      (begin (printf "Using step procedure: ~s\nExploring query:\n~s\n"
                     'step '(query (qvars ...) body ...))
             (map reify/initial-var (ow-stream-take/step step (and n (- n 1)) '(qvars ...) (query (qvars ...) body ...)))))))
-
-(search nastep 10 (query (a b) (appendo a b '(1 2 3 4))))
-
-(write (nastep (simplify (nastep (query (a b) (appendo a b '(1 2 3 4)))))))
-
-
-(let ((stream (pause empty-state (fresh (a b) (== initial-var `(,a ,b)) (appendo a b '(1 2 3 4))))))
-  (serialize-choices (stream->choices (step stream))))
