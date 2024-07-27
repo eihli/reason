@@ -2,7 +2,9 @@
 
 (provide run
          stream->choices
-         make-nastep)
+         make-nastep
+         layerso
+         parse-nums)
 
 (require (prefix-in dispatch: web-server/dispatch)
          (prefix-in dispatch-log: web-server/dispatchers/dispatch-log)
@@ -588,6 +590,24 @@
         (printf "received ~s\n" received)
         received))))
 
+(define (nastart step st g)
+  (match g
+    ((disj g1 g2)
+     (step (mplus (pause st g1)
+                  (pause st g2))))
+    ((conj g1 g2)
+     (step (bind (pause st g1) g2)))
+    ((relate thunk _)
+     (pause st (thunk)))
+    ((== t1 t2) (state->stream (unify t1 t2 st)))
+    ((=/= t1 t2) (state->stream (disunify t1 t2 st)))
+    ((symbolo t) (state->stream (typify t symbol? st)))
+    ((stringo t) (state->stream (typify t string? st)))
+    ((numbero t) (state->stream (typify t number? st)))
+    ((not-symbolo t) (state->stream (distypify t symbol? st)))
+    ((not-stringo t) (state->stream (distypify t string? st)))
+    ((not-numbero t) (state->stream (distypify t number? st)))))
+
 (define (make-nastep decide)
   (define (nastep s)
     (match s
@@ -598,29 +618,27 @@
                 (cons (car s1)
                       (if (eqv? 's1 (decide s))
                           (begin
-                            (println "decided on s1")
                             (mplus (cdr s1) s2))
                           (begin
-                            (println "decided on s2")
                             (mplus s2 (cdr s1))))))
                (else (if (eqv? 's1 (decide s))
                          (begin
-                           (println "decided on s1")
                            (mplus s1 s2))
                          (begin
-                           (println "decided on s2")
                            (mplus s2 s1)))))))
       ((bind s g)
        (let ((s (if (mature? s) s (nastep s))))
          (cond ((not s) #f)
                ((pair? s)
                 (if (eqv? 's1 (decide s))
-                    (nastep (mplus (pause (car s) g)
-                                   (bind (cdr s) g)))
-                    (nastep (mplus (bind (cdr s) g)
-                                   (pause (car s) g)))))
+                    (begin
+                      (nastep (mplus (pause (car s) g)
+                                     (bind (cdr s) g))))
+                    (begin
+                      (nastep (mplus (bind (cdr s) g)
+                                     (pause (car s) g))))))
                (else (bind s g)))))
-      ((pause st g) (start st g))
+      ((pause st g) (nastart nastep st g))
       (_            s)))
   nastep)
 

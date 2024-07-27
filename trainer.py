@@ -59,6 +59,8 @@ def run_server():
     socket.bind("tcp://127.0.0.5:5555")
     while True:
         message = socket.recv()
-        socket.send(struct.pack("!i", random.randint(0, 1)))
+        choice = random.randint(0, 1)
+        print(f"chose {choice}")
+        socket.send(struct.pack("!i", choice))
 
 run_server()
