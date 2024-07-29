@@ -276,6 +276,13 @@
       (tailo rst tail)))))
 
 (define-relation (countero q)
+  (<lo '() q)
+  (conde
+   ((== q `(1)))
+   ((tailo q 1))))
+
+(define-relation (dimso q)
+  (<lo '() q)
   (conde
    ((== q `(1)))
    ((tailo q 1))))
@@ -290,8 +297,7 @@
            (layero layer in out)
            (== layers `(,layer (OUT ,out)))))
    ((fresh (layer-1 layer-2 hidden)
-           (countero hidden)
-           (<lo '(1) hidden)
+           (dimso hidden)
            (layero layer-1 in hidden)
            (layerso layer-2 hidden out)
            (== layers `(,layer-1 . ,layer-2))))))
@@ -322,9 +328,6 @@
         (if (pair? s)
             (cons (car s) (stream-take/step step (and n (- n 1)) (cdr s)))
             '()))))
-
-(define (simplify s)
-  (prune/stream (dnf/stream s)))
 
 ;; Parallel step
 (define (ow-parallel-step-simple s)
@@ -523,15 +526,6 @@
 ;; (run*/step random-step (a b) (appendo a b '(1 2 3 4)))
 ;; (parse-nums (run/step random-step 50 (q) (layerso q '(0 0 0 1) '(0 0 1))))
 
-(let ((stream (simplify (step (pause empty-state (fresh (a b) (== initial-var `(,a ,b)) (appendo a b '(1 2 3 4))))))))
-  (step stream))
-
-(let ((stream (pause empty-state (fresh (a b) (== initial-var `(,a ,b))
-                                        (disj*
-                                         (== a 1)
-                                         (== a 2))))))
-  (parallel-step stream))
-
 ;; (stream->choices (prune/stream (dnf/stream (query (q)
 ;;                                                   (fresh (x y)
 ;;                                                          (conj*
@@ -630,13 +624,8 @@
        (let ((s (if (mature? s) s (nastep s))))
          (cond ((not s) #f)
                ((pair? s)
-                (if (eqv? 's1 (decide s))
-                    (begin
-                      (nastep (mplus (pause (car s) g)
-                                     (bind (cdr s) g))))
-                    (begin
-                      (nastep (mplus (bind (cdr s) g)
-                                     (pause (car s) g))))))
+                (nastep (mplus (pause (car s) g)
+                               (bind (cdr s) g))))
                (else (bind s g)))))
       ((pause st g) (nastart nastep st g))
       (_            s)))
@@ -659,3 +648,324 @@
      (begin (printf "Using step procedure: ~s\nExploring query:\n~s\n"
                     'step '(query (qvars ...) body ...))
             (map reify/initial-var (ow-stream-take/step step (and n (- n 1)) '(qvars ...) (query (qvars ...) body ...)))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Propagate shallow constraints and prune failures.
+(define (prune/stream s)
+  (match s
+    ((mplus s1 s2) (match (prune/stream s1)
+                     (#f (prune/stream s2))
+                     (s1 (match (prune/stream s2)
+                           (#f s1)
+                           (s2 (mplus s1 s2))))))
+    ((bind s g)    (match (prune/stream s)
+                     (#f          #f)
+                     (`(,st . #f) (prune/goal st g))
+                     ((pause st g1)
+                      (match (prune/goal st g)
+                        (#f           #f)
+                        ((pause st g) (pause st (conj g1 g)))))
+                     (s (match (prune/goal empty-state g)
+                          (#f          #f)
+                          ((pause _ _) (bind s g))))))
+    ((pause st g)  (prune/goal st g))
+    (`(,st . ,s)   `(,st . ,(prune/stream s)))
+    (s             s)))
+
+(define (prune/goal st g)
+  (define (prune/term t) (walk* t (state-sub st)))
+  (match g
+    ((disj g1 g2)
+     (match (prune/goal st g1)
+       (#f (prune/goal st g2))
+       ((pause st1 g1)
+        (match (prune/goal st g2)
+          (#f           (pause st1 g1))
+          ((pause _ g2) (pause st (disj g1 g2)))))))
+    ((conj g1 g2)
+     (match (prune/goal st g1)
+       (#f            #f)
+       ((pause st g1) (match (prune/goal st g2)
+                        (#f            #f)
+                        ((pause st g2) (pause st (conj g1 g2)))))))
+    ((relate thunk d) (pause st (relate thunk (prune/term d))))
+    ((== t1 t2)
+     (let ((t1 (prune/term t1)) (t2 (prune/term t2)))
+       (match (unify t1 t2 st)
+         (#f          #f)
+         (st          (pause st (== t1 t2))))))
+    ((=/= t1 t2)
+     (let ((t1 (prune/term t1)) (t2 (prune/term t2)))
+       (match (disunify t1 t2 st)
+         (#f          #f)
+         (st          (pause st (=/= t1 t2))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Transform into Disjunctive Normal Form.
+(define (dnf/stream s)
+  (define (push-pause st g)
+    (match g
+      ((disj g1 g2) (mplus (push-pause st g1) (push-pause st g2)))
+      (g            (pause st g))))
+  (match s
+    ((bind s g)
+     (let loop1 ((s (dnf/stream s)) (g (dnf/goal g)))
+       (define (loop2 s g)
+         (match g
+           ((disj ga gb) (mplus (loop2 s ga) (loop2 s gb)))
+           (g            (bind s g))))
+       (match s
+         ((mplus sa sb) (mplus (loop1 sa g) (loop1 sb g)))
+         (`(,st . ,s)   (mplus (push-pause st g) (loop1 s g)))
+         (s             (loop2 s g)))))
+    ((pause st g)  (push-pause st (dnf/goal g)))
+    ((mplus s1 s2) (mplus (dnf/stream s1) (dnf/stream s2)))
+    (`(,st . ,s)   `(,st . ,(dnf/stream s)))
+    (s             s)))
+
+(define (dnf/goal g)
+  (match g
+    ((conj g1 g2)
+     (let loop1 ((g1 (dnf/goal g1)) (g2 (dnf/goal g2)))
+       (define (loop2 g1 g2)
+         (match g2
+           ((disj g2a g2b) (disj (loop2 g1 g2a) (loop2 g1 g2b)))
+           (g2             (conj g1 g2))))
+       (match g1
+         ((disj g1a g1b) (disj (loop1 g1a g2) (loop1 g1b g2)))
+         (g1             (loop2 g1 g2)))))
+    ((disj g1 g2) (disj (dnf/goal g1) (dnf/goal g2)))
+    (g            g)))
+
+(define (simplify s)
+  (prune/stream (dnf/stream s)))
+
+
+
+
+(define (start/step step st g)
+  (match g
+    ((disj g1 g2)
+     (step (mplus (pause st g1)
+                  (pause st g2))))
+    ((conj g1 g2)
+     (step (bind (pause st g1) g2)))
+    ((relate thunk _)
+     (pause st (thunk)))
+    ((== t1 t2) (state->stream (unify t1 t2 st)))
+    ((=/= t1 t2) (state->stream (disunify t1 t2 st)))
+    ((symbolo t) (state->stream (typify t symbol? st)))
+    ((stringo t) (state->stream (typify t string? st)))
+    ((numbero t) (state->stream (typify t number? st)))
+    ((not-symbolo t) (state->stream (distypify t symbol? st)))
+    ((not-stringo t) (state->stream (distypify t string? st)))
+    ((not-numbero t) (state->stream (distypify t number? st)))))
+
+(define (choose/random s1 s2)
+  (if (= 0 (random 0 2))
+      `(,s1 . ,s2)
+      `(,s2 . ,s1)))
+
+
+(define (make-stepper choose)
+  (define (stepper s)
+    (match s
+      ((mplus s1 s2)
+       (let ((choices (choose s1 s2)))
+         (printf "Expanding ~s\n" (car choices))
+         (let ((s1 (step (car choices)))
+               (s2 (cdr choices)))
+           (cond ((not s1) s2)
+                 ((pair? s1)
+                  (cons (car s1)
+                        (mplus s2 (cdr s1))))
+                 (else (mplus s2 s1))))))
+      ((bind s g)
+       (let ((s (stepper s)))
+         (cond ((not s) #f)
+               ((pair? s)
+                (stepper (mplus (pause (car s) g)
+                                (bind (cdr s) g))))
+               (else (bind s g)))))
+      ((pause st g) (start/step stepper st g))
+      (_            s)))
+  stepper)
+
+
+(define (take-path d s1 s2)
+  (if (= d 0)
+      `(,s1 . ,s2)
+      `(,s2 . ,s1)))
+
+(define (path-stepper path)
+  (define (stepper s)
+    (let ((inner-stepper (lambda (s) ((path-stepper (cdr path)) s))))
+      (match s
+        ((mplus s1 s2)
+         (let ((path (cdr path))
+               (choices (take-path (car path) s1 s2)))
+           (printf "Expanding ~s\n" (car choices))
+           (let ((s1 (step (car choices)))
+                 (s2 (cdr choices)))
+             (cond ((not s1) s2)
+                   ((pair? s1)
+                    (cons (car s1)
+                          (mplus s2 (cdr s1))))
+                   (else (mplus s2 s1))))))
+        ((bind s g)
+         (let ((s (stepper s)))
+           (cond ((not s) #f)
+                 ((pair? s)
+                  (stepper (mplus (pause (car s) g)
+                                  (bind (cdr s) g))))
+                 (else (bind s g)))))
+        ((pause st g) (start/step inner-stepper st g))
+        (_            s))))
+  stepper)
+
+(let ((mustep (path-stepper '(0 0 0)))
+      (s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
+  (let ((simple-stepper (lambda (s) (simplify (mustep s)))))
+    (list
+     s
+     (simple-stepper s)
+     (simple-stepper (simple-stepper s))
+     (simple-stepper (simple-stepper (simple-stepper s)))
+     (simple-stepper (simple-stepper (simple-stepper (simple-stepper s))))
+     (simple-stepper (simple-stepper (simple-stepper (simple-stepper (simple-stepper s))))))))
+
+(define (spaces i)
+  (make-string i #\space))
+
+(define (indent i)
+  (+ i 4))
+
+(define (pp/mplus i s1 s2)
+  (format "~amplus\n~a~a"
+          (spaces i)
+          (pp/stream (indent i) s1)
+          (pp/stream (indent i) s2)))
+
+(define (pp/bind i s g)
+  (format "~abind\n~a~a"
+          (spaces i)
+          (pp/stream (indent i) s)
+          (pp/goal (indent i) g)))
+
+(define (pp/disj i g1 g2)
+  (format "~adisj\n~a~a"
+          (spaces i)
+          (pp/goal (indent i) g1)
+          (pp/goal (indent i) g2)))
+
+(define (flatten/conj c)
+  (match c
+    ((conj g1 g2)
+     (cond
+       ((and (conj? g1) (conj? g2))
+        (append (flatten/conj g1)
+                (flatten/conj g2)))
+       ((conj? g1)
+        (cons g2 (flatten/conj g1)))
+       ((conj? g2)
+        (cons g1 (flatten/conj g2)))
+       (else (list g1 g2))))
+    (c (list c))))
+
+(define (pp/conj- i g1 g2)
+  (format "~aconj\n~a~a"
+          (spaces i)
+          (pp/goal (indent i) g1)
+          (pp/goal (indent i) g2)))
+
+(define (pp/conj i g1 g2)
+  (let ((cxs (flatten/conj (conj g1 g2))))
+    (let loop ((cxs cxs)
+               (out (format "~aconj\n" (spaces i))))
+      (if (null? cxs)
+          out
+          (loop (cdr cxs) (string-append out (pp/goal (indent i) (car cxs))))))))
+
+(define (pp/== i t1 t2)
+  (format "~a== ~a ~a\n"
+          (spaces i)
+          (pp/term t1)
+          (pp/term t2)))
+
+(define (pp/term t)
+  (format "~a" t))
+
+(define (pp/relate i t d)
+  (format "~a~a\n" (spaces i) d))
+
+(define (pp/goal i g)
+  (match g
+    ((disj g1 g2) (pp/disj i g1 g2))
+    ((conj g1 g2) (pp/conj i g1 g2))
+    ((== t1 t2) (pp/== i t1 t2))
+    ((relate t d) (pp/relate i t d))))
+
+(define (pp/pause i st g)
+  (format "~a~a~a"
+          (spaces i)
+          (pp/state (indent i) st)
+          (pp/goal (indent i) g)))
+
+(define (pp/state i st)
+  (format "~a~a\n"
+          (indent i)
+          st))
+
+(define (pp/stream i s)
+  (match s
+    ((mplus s1 s2) (format "~a~a" (make-string i #\space) (pp/mplus i s1 s2)))
+    ((bind s g) (format "~a~a" (make-string i #\space) (pp/bind i s g)))
+    ((pause st g) (format "~a~a" (make-string i #\space) (pp/pause i st g)))
+    (`(,st . ,s) (format "~a~a~a" (make-string i #\space) (pp/state i st) (pp/stream i s)))
+    (s (format "~a~a\n" (make-string i #\space) s))))
+
+(define (step/direction d s)
+  (match s
+    ((mplus s1 s2)
+     (let ((choices (take-path d s1 s2)))
+       (printf "Expanding\n~a\n" (pp/stream 4 (car choices)))
+       (let ((s1 (step (car choices)))
+             (s2 (cdr choices)))
+         (cond ((not s1) s2)
+               ((pair? s1)
+                (cons (car s1)
+                      (mplus s2 (cdr s1))))
+               (else (mplus s2 s1))))))
+    ((bind s g)
+     (let ((s (step/direction d s)))
+       (cond ((not s) #f)
+             ((pair? s)
+              (mplus (pause (car s) g)
+                     (bind (cdr s) g)))
+             (else (bind s g)))))
+    ((pause st g) (start/step (lambda (s) (step/direction d s)) st g))
+    (_            s)))
+
+(define (take/path path n s)
+  (cond
+    ((pair? s)
+     (cons (car s) (take/path path (- n 1) (cdr s))))
+    ((= n 0) '())
+    ((null? path) '())
+    (else (take/path (cdr path) n (step/direction (car path) s)))))
+
+(let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
+  (take/path '(0 0 0 0 0 0) 1 s))
+
+(let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
+  (take/path '(0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1) 2 s))
+
+(let ((stream (simplify (step (pause empty-state (fresh (a b) (== initial-var `(,a ,b)) (appendo a b '(1 2 3 4))))))))
+  (step stream))
+
+(let ((stream (pause empty-state (fresh (a b) (== initial-var `(,a ,b))
+                                        (disj*
+                                         (== a 1)
+                                         (== a 2))))))
+  (parallel-step stream))

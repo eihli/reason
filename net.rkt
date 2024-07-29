@@ -14,8 +14,6 @@
       (== ab `(,a1 . ,res))
       (appendo a2 b res)))))
 
-
-
 (define (parse-integer bs)
   (let loop ((r 0)
              (i 0))
@@ -28,6 +26,10 @@
   (lambda (s)
     (let ((out (open-output-string)))
       (write s out)
+      (with-output-to-file "/tmp/foo"
+        (lambda ()
+          (printf "~s\n" s))
+        #:exists 'append)
       (zmq-send socket (get-output-string out))
       (let ((response (zmq-recv-string socket)))
         (if (= (parse-integer (string->bytes/utf-8 response)) 0) 's1 's2)))))
@@ -44,7 +46,12 @@
   (if (eqv? 0 n) '()
       (let ((s (mature/step step s)))
         (if (pair? s)
-            (cons (car s) (stream-take/step step (and n (- n 1)) (cdr s)))
+            (begin
+              (with-output-to-file "/tmp/foo"
+                (lambda ()
+                  (printf "RESULT: ~s\n" (car s)))
+                #:exists 'append)
+              (cons (car s) (stream-take/step step (and n (- n 1)) (cdr s))))
             '()))))
 
 (define (run socket)
@@ -57,9 +64,9 @@
   (let ((s (query (q) (layerso q '(0 0 0 1) '(0 0 1)))))
     (let ((decide (make-decider socket)))
       (map reify/initial-var (stream-take/step (let ((step (make-nastep decide)))
-                                                 (lambda (s) (step s))) 50 s)))))
+                                                 (lambda (s) (step s))) 10 s)))))
 
-(run socket)
+(layer-run socket)
 
 (define decide (make-decider socket))
 

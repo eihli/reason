@@ -60,7 +60,7 @@ def run_server():
     while True:
         message = socket.recv()
         choice = random.randint(0, 1)
-        print(f"chose {choice}")
+        print(f"choosing to explore stream #{choice}")
         socket.send(struct.pack("!i", choice))
 
 run_server()
