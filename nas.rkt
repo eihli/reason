@@ -573,16 +573,15 @@
 ;; Maybe a simpler alternative it to order the choices and then iterate over all of them.
 (require zeromq)
 
-(define requester (zmq-socket 'pair #:connect "tcp://localhost:5555"))
 
-(define (make-requester)
-  (lambda (s)
-    (let ((out (open-output-string)))
-      (write s out)
-      (zmq-send requester (get-output-string out))
-      (let ((received (zmq-recv-string requester)))
-        (printf "received ~s\n" received)
-        received))))
+;; (define (make-requester)
+;;   (lambda (s)
+;;     (let ((out (open-output-string)))
+;;       (write s out)
+;;       (zmq-send requester (get-output-string out))
+;;       (let ((received (zmq-recv-string requester)))
+;;         (printf "received ~s~n" received)
+;;         received))))
 
 (define (nastart step st g)
   (match g
@@ -645,7 +644,7 @@
 (define-syntax search
   (syntax-rules (query)
     ((_ step n (query (qvars ...) body ...))
-     (begin (printf "Using step procedure: ~s\nExploring query:\n~s\n"
+     (begin (printf "Using step procedure: ~s~nExploring query:~n~s~n"
                     'step '(query (qvars ...) body ...))
             (map reify/initial-var (ow-stream-take/step step (and n (- n 1)) '(qvars ...) (query (qvars ...) body ...)))))))
 
@@ -773,7 +772,7 @@
     (match s
       ((mplus s1 s2)
        (let ((choices (choose s1 s2)))
-         (printf "Expanding ~s\n" (car choices))
+         (printf "Expanding ~s~n" (car choices))
          (let ((s1 (step (car choices)))
                (s2 (cdr choices)))
            (cond ((not s1) s2)
@@ -805,7 +804,7 @@
         ((mplus s1 s2)
          (let ((path (cdr path))
                (choices (take-path (car path) s1 s2)))
-           (printf "Expanding ~s\n" (car choices))
+           (printf "Expanding ~s~n" (car choices))
            (let ((s1 (step (car choices)))
                  (s2 (cdr choices)))
              (cond ((not s1) s2)
@@ -839,23 +838,20 @@
   (make-string i #\space))
 
 (define (indent i)
-  (+ i 4))
+  (+ i 2))
 
 (define (pp/mplus i s1 s2)
-  (format "~amplus\n~a~a"
-          (spaces i)
+  (format "mplus~n~a~a"
           (pp/stream (indent i) s1)
           (pp/stream (indent i) s2)))
 
 (define (pp/bind i s g)
-  (format "~abind\n~a~a"
-          (spaces i)
+  (format "bind~n~a~a"
           (pp/stream (indent i) s)
           (pp/goal (indent i) g)))
 
 (define (pp/disj i g1 g2)
-  (format "~adisj\n~a~a"
-          (spaces i)
+  (format "disj~n~a~a"
           (pp/goal (indent i) g1)
           (pp/goal (indent i) g2)))
 
@@ -874,22 +870,20 @@
     (c (list c))))
 
 (define (pp/conj- i g1 g2)
-  (format "~aconj\n~a~a"
-          (spaces i)
+  (format "conj~n~a~a"
           (pp/goal (indent i) g1)
           (pp/goal (indent i) g2)))
 
 (define (pp/conj i g1 g2)
   (let ((cxs (flatten/conj (conj g1 g2))))
     (let loop ((cxs cxs)
-               (out (format "~aconj\n" (spaces i))))
+               (out (format "conj~n")))
       (if (null? cxs)
           out
           (loop (cdr cxs) (string-append out (pp/goal (indent i) (car cxs))))))))
 
 (define (pp/== i t1 t2)
-  (format "~a== ~a ~a\n"
-          (spaces i)
+  (format "== ~a ~a~n"
           (pp/term t1)
           (pp/term t2)))
 
@@ -897,25 +891,23 @@
   (format "~a" t))
 
 (define (pp/relate i t d)
-  (format "~a~a\n" (spaces i) d))
+  (format "~a~n" d))
 
 (define (pp/goal i g)
   (match g
-    ((disj g1 g2) (pp/disj i g1 g2))
-    ((conj g1 g2) (pp/conj i g1 g2))
-    ((== t1 t2) (pp/== i t1 t2))
-    ((relate t d) (pp/relate i t d))))
+    ((disj g1 g2) (format "~a~a" (spaces i) (pp/disj i g1 g2)))
+    ((conj g1 g2) (format "~a~a" (spaces i) (pp/conj i g1 g2)))
+    ((== t1 t2) (format "~a~a" (spaces i) (pp/== i t1 t2)))
+    ((relate t d) (format "~a~a" (spaces i) (pp/relate i t d)))))
 
 (define (pp/pause i st g)
-  (format "~a~a~a"
-          (spaces i)
+  (format "pause~n~a~a~a"
+          (spaces (indent i))
           (pp/state (indent i) st)
           (pp/goal (indent i) g)))
 
 (define (pp/state i st)
-  (format "~a~a\n"
-          (indent i)
-          st))
+  (format "~a~n" st))
 
 (define (pp/stream i s)
   (match s
@@ -923,13 +915,14 @@
     ((bind s g) (format "~a~a" (make-string i #\space) (pp/bind i s g)))
     ((pause st g) (format "~a~a" (make-string i #\space) (pp/pause i st g)))
     (`(,st . ,s) (format "~a~a~a" (make-string i #\space) (pp/state i st) (pp/stream i s)))
-    (s (format "~a~a\n" (make-string i #\space) s))))
+    (s (format "~a~a~n" (make-string i #\space) s))))
 
 (define (step/direction d s)
   (match s
     ((mplus s1 s2)
      (let ((choices (take-path d s1 s2)))
-       (printf "Expanding\n~a\n" (pp/stream 4 (car choices)))
+       (printf "Expanding~n~a" (pp/stream 2 (car choices)))
+       (flush-output (current-output-port))
        (let ((s1 (step (car choices)))
              (s2 (cdr choices)))
          (cond ((not s1) s2)
@@ -956,7 +949,17 @@
     (else (take/path (cdr path) n (step/direction (car path) s)))))
 
 (let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
-  (take/path '(0 0 0 0 0 0) 1 s))
+  (list
+   (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s)
+   (walk* initial-var (state-sub (car (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s))))))
+
+(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
+  (list
+   (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s)
+   (map (lambda (s) (walk* initial-var (state-sub s))) (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 4 s))))
+
+(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
+  (map (lambda (s) (walk* initial-var (state-sub s))) (take/path '(1 1 1 1 1 1 0 0 0 0 0 0 ) 4 s)))
 
 (let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
   (take/path '(0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1) 2 s))
@@ -969,3 +972,147 @@
                                          (== a 1)
                                          (== a 2))))))
   (parallel-step stream))
+
+
+(define (step/choose choose s)
+  (match s
+    ((mplus s1 s2)
+     (let* ((meatbag-data (pp/stream 2 s))
+            (choice (choose meatbag-data))
+            (choices (if (= choice 0)
+                         `(,s1 . ,s2)
+                         `(,s2 . ,s1))))
+       (printf "Expanding~n~a" (pp/stream 2 (car choices)))
+       (let ((s1 (step/choose choose (car choices)))
+             (s2 (cdr choices)))
+         (cond ((not s1) s2)
+               ((pair? s1)
+                (cons (car s1)
+                      (mplus s2 (cdr s1))))
+               (else (mplus s2 s1))))))
+    ((bind s g)
+     (let ((s (step/choose choose s)))
+       (cond ((not s) #f)
+             ((pair? s)
+              (mplus (pause (car s) g)
+                     (bind (cdr s) g)))
+             (else (bind s g)))))
+    ((pause st g) (start/step (lambda (s) (step/choose choose s)) st g))
+    (_            s)))
+
+(define (parse-integer bs)
+  (let loop ((r 0)
+             (i 0))
+    (if (= i 4)
+        r
+        (loop (+ (arithmetic-shift r 8) (bytes-ref bs i))
+              (+ i 1)))))
+
+;; (define (make-choose socket)
+;;   (lambda (s)
+;;     (let ((out (open-output-string)))
+;;       (display s out)
+;;       (zmq-send socket (string->bytes/utf-8 (get-output-string out)))
+;;       (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string requester)))))
+;;         (printf "received ~s~n" received)
+;;         received))))
+
+;; (define requester (zmq-socket 'pair #:connect "tcp://127.0.0.5:5555"))
+
+;; (let ((s (simplify (query (a b) (appendo a b '(1 2 3 4)))))
+;;       (choose (make-choose requester)))
+;;   (list
+;;    s
+;;    (step/choose choose (step/choose choose s))))
+
+(define (take/choice choose n s)
+  (cond
+    ((pair? s)
+     (begin
+       (display (format "Success:~n~a~n" (reify/initial-var (car s))))
+       (cons (car s) (take/choice choose (- n 1) (cdr s)))))
+    ((= n 0) '())
+    ((null? s) '())
+    (else (take/choice choose n (step/choose choose s)))))
+
+;; (let ((s (simplify (query (a b) (appendo a b '(1 2 3 4)))))
+;;       (choose (make-choose requester)))
+;;   (take/choice choose 8 s))
+
+(define (make-take/nas sock)
+  (define (take/nas choose n s)
+    (cond
+      ((pair? s)
+       (begin
+         (zmq-send
+          sock
+          (string->bytes/utf-8 (format "Success: ~a~n" (reify/initial-var (car s)))))
+         (cons (car s) (take/nas choose (- n 1) (cdr s)))))
+      ((= n 0) '())
+      ((null? s) '())
+      (else (take/choice choose n (step/choose choose s)))))
+  take/nas)
+
+;; (let* ((s (simplify (query (a b) (appendo a b '(1 2 3 4)))))
+;;        (take/nas (make-take/nas requester))
+;;        (choose (make-choose requester)))
+;;   (take/nas choose 8 s))
+
+(define (nas-server sock)
+  (define (take/path path n s)
+    (cond
+      ((pair? s)
+       (begin
+         (flush-output (current-output-port))
+         (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string sock)))))
+           (zmq-send
+            sock
+            (string->bytes/utf-8 (format "Success: ~a~n" (reify/initial-var (car s)))))
+           (display (format "Found result: ~a~n" (reify/initial-var (car s))))
+           (flush-output (current-output-port))
+           (cons (car s) (take/path (list received) (- n 1) (cdr s))))))
+      ((= n 0)
+       (begin
+         (display "Found all requested results.")
+         (zmq-send sock (string->bytes/utf-8 "terminated~n"))
+         '()))
+      (else
+       (begin
+         (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string sock)))))
+           (display (format "Pulling from stream: ~a~n" received))
+           (flush-output (current-output-port))
+           (let ((s (step/direction (car path) s)))
+             (zmq-send sock (string->bytes/utf-8 (pp/stream 0 s)))
+             (take/path (list received) n s)))))))
+  take/path)
+
+(define (responder-thread sock)
+  (thread
+   (lambda ()
+     (with-output-to-file "/tmp/foo"
+       (lambda ()
+         (zmq-bind sock "tcp://127.0.0.5:5555")
+         (display (format "bound~n"))
+         (let* ((take/path (nas-server sock))
+                (s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
+           (take/path '(0) 8 s)))
+       #:exists 'truncate/replace))))
+
+(define sock (zmq-socket 'pair))
+
+(define t (responder-thread sock))
+
+
+;; (define test-threa
+;;   (thread
+;;    (lambda ()
+;;      (with-output-to-file "/tmp/foo"
+;;        (lambda ()
+;;          (display (format "Hello, ~a~n" "World!")))
+;;        #:exists 'truncate/replace))))
+
+
+;; (let* ((s (simplify (query (a b) (appendo a b '(1 2 3 4)))))
+;;        (take/nas (make-take/nas requester))
+;;        (choose (make-choose requester)))
+;;   (take/nas choose 8 s))

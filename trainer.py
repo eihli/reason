@@ -59,8 +59,13 @@ def run_server():
     socket.bind("tcp://127.0.0.5:5555")
     while True:
         message = socket.recv()
-        choice = random.randint(0, 1)
-        print(f"choosing to explore stream #{choice}")
+        print(message.decode("utf-8"))
+        choice = input("Choose a path, 0 or 1: ")
+        try:
+            choice = int(choice)
+        except:
+            print(f"Received {choice} but expected an integer.")
+            continue
         socket.send(struct.pack("!i", choice))
 
 run_server()
