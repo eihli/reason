@@ -921,8 +921,6 @@
   (match s
     ((mplus s1 s2)
      (let ((choices (take-path d s1 s2)))
-       (printf "Expanding~n~a" (pp/stream 2 (car choices)))
-       (flush-output (current-output-port))
        (let ((s1 (step (car choices)))
              (s2 (cdr choices)))
          (cond ((not s1) s2)
@@ -931,14 +929,14 @@
                       (mplus s2 (cdr s1))))
                (else (mplus s2 s1))))))
     ((bind s g)
-     (let ((s (step/direction d s)))
-       (cond ((not s) #f)
-             ((pair? s)
-              (mplus (pause (car s) g)
-                     (bind (cdr s) g)))
-             (else (bind s g)))))
-    ((pause st g) (start/step (lambda (s) (step/direction d s)) st g))
+     (cond ((not s) #f)
+           ((pair? s)
+            (mplus (pause (car s) g)
+                   (bind (cdr s) g)))
+           (else (bind s g))))
+    ((pause st g) (start/step (lambda (s) s) st g))
     (_            s)))
+
 
 (define (take/path path n s)
   (cond
@@ -946,33 +944,12 @@
      (cons (car s) (take/path path (- n 1) (cdr s))))
     ((= n 0) '())
     ((null? path) '())
-    (else (take/path (cdr path) n (step/direction (car path) s)))))
+    (else (take/path (cdr path) n (simplify (step/direction (car path) s))))))
 
-(let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
-  (list
-   (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s)
-   (walk* initial-var (state-sub (car (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s))))))
-
-(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
-  (list
-   (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s)
-   (map (lambda (s) (walk* initial-var (state-sub s))) (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 4 s))))
-
-(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
-  (map (lambda (s) (walk* initial-var (state-sub s))) (take/path '(1 1 1 1 1 1 0 0 0 0 0 0 ) 4 s)))
-
-(let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
-  (take/path '(0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1) 2 s))
-
-(let ((stream (simplify (step (pause empty-state (fresh (a b) (== initial-var `(,a ,b)) (appendo a b '(1 2 3 4))))))))
-  (step stream))
-
-(let ((stream (pause empty-state (fresh (a b) (== initial-var `(,a ,b))
-                                        (disj*
-                                         (== a 1)
-                                         (== a 2))))))
-  (parallel-step stream))
-
+;; (let ((s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
+;;   (list
+;;    (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s)
+;;    (walk* initial-var (state-sub (car (take/path '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) 1 s))))))
 
 (define (step/choose choose s)
   (match s
@@ -1062,28 +1039,29 @@
   (define (take/path path n s)
     (cond
       ((pair? s)
-       (begin
-         (flush-output (current-output-port))
-         (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string sock)))))
-           (zmq-send
-            sock
-            (string->bytes/utf-8 (format "Success: ~a~n" (reify/initial-var (car s)))))
-           (display (format "Found result: ~a~n" (reify/initial-var (car s))))
-           (flush-output (current-output-port))
-           (cons (car s) (take/path (list received) (- n 1) (cdr s))))))
-      ((= n 0)
-       (begin
-         (display "Found all requested results.")
-         (zmq-send sock (string->bytes/utf-8 "terminated~n"))
-         '()))
+       (zmq-send
+        sock
+        (string->bytes/utf-8 (format "Success: ~a~nStream:~n~a~n~nWhich path do you want to take? [0, 1]~n"
+                                     (reify/initial-var (car s))
+                                     (string->bytes/utf-8 (pp/stream 0 (cdr s)))))))
+      ((or (null? s) (= n 0))
+       (zmq-send sock (string->bytes/utf-8 "terminated~n")))
       (else
-       (begin
-         (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string sock)))))
-           (display (format "Pulling from stream: ~a~n" received))
-           (flush-output (current-output-port))
-           (let ((s (step/direction (car path) s)))
-             (zmq-send sock (string->bytes/utf-8 (pp/stream 0 s)))
-             (take/path (list received) n s)))))))
+       (zmq-send
+        sock
+        (string->bytes/utf-8 (format "Stream:~n~a~n~nWhich path do you want to take? [0, 1]~n"
+                                     (string->bytes/utf-8 (pp/stream 0 s)))))))
+    (cond
+      ((pair? s)
+       (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string sock)))))
+         (cons (car s) (let ((s (simplify (step/direction received s))))
+                         (take/path path n s)))))
+      ((= n 0) '())
+      ((null? s) '())
+      (else
+       (let ((received (parse-integer (string->bytes/utf-8 (zmq-recv-string sock)))))
+         (let ((s (simplify (step/direction received s))))
+           (take/path path n s))))))
   take/path)
 
 (define (responder-thread sock)
@@ -1098,9 +1076,201 @@
            (take/path '(0) 8 s)))
        #:exists 'truncate/replace))))
 
-(define sock (zmq-socket 'pair))
 
-(define t (responder-thread sock))
+(define (a-start st g)
+  (match g
+    ((disj g1 g2)
+     (a-step (mplus (pause st g1)
+                    (pause st g2))))
+    ((conj g1 g2)
+     (a-step (bind (pause st g1) g2)))
+    ((relate thunk _)
+     (pause st (thunk)))
+    ((== t1 t2) (state->stream (unify t1 t2 st)))
+    ((=/= t1 t2) (state->stream (disunify t1 t2 st)))
+    ((symbolo t) (state->stream (typify t symbol? st)))
+    ((stringo t) (state->stream (typify t string? st)))
+    ((numbero t) (state->stream (typify t number? st)))
+    ((not-symbolo t) (state->stream (distypify t symbol? st)))
+    ((not-stringo t) (state->stream (distypify t string? st)))
+    ((not-numbero t) (state->stream (distypify t number? st)))))
+
+(define (a-step s)
+  (match s
+    ((mplus s1 s2)
+     (cond ((not s1) s2)
+           ((pair? s1)
+            (cons (car s1)
+                  (mplus (cdr s1) s2)))
+           (else (mplus s1 s2))))
+    ((bind s g)
+     (cond ((not s) #f)
+           ((pair? s)
+            (a-step (mplus (pause (car s) g)
+                           (bind (cdr s) g))))
+           (else (bind s g))))
+    ((pause st g) (a-start st g))
+    (_            s)))
+
+(define (mustart st g)
+  (match g
+    ((disj g1 g2)
+     (mustep (mplus (pause st g1)
+                    (pause st g2))))
+    ((conj g1 g2)
+     (mustep (bind (pause st g1) g2)))
+    ((relate thunk _)
+     (pause st (thunk)))
+    ((== t1 t2) (state->stream (unify t1 t2 st)))
+    ((=/= t1 t2) (state->stream (disunify t1 t2 st)))
+    ((symbolo t) (state->stream (typify t symbol? st)))
+    ((stringo t) (state->stream (typify t string? st)))
+    ((numbero t) (state->stream (typify t number? st)))
+    ((not-symbolo t) (state->stream (distypify t symbol? st)))
+    ((not-stringo t) (state->stream (distypify t string? st)))
+    ((not-numbero t) (state->stream (distypify t number? st)))))
+
+;; start's pauses and propagates up mature streams
+(define (mustep s)
+  (match s
+    ((mplus s1 s2)
+     (cond ((not s1) s2)
+           ((pair? s1)
+            (cons (car s1)
+                  (mplus (cdr s1) s2)))
+           (else (mplus s1 s2))))
+    ((bind s g)
+     (cond ((not s) #f)
+           ((pair? s)
+            (mplus (pause (car s) g)
+                   (bind (cdr s) g)))
+           (else (bind s g))))
+    ((pause st g) (mustart st g))
+    (_ s)))
+
+
+(define (pullup-mature-streams s)
+  (match s
+    ((mplus s1 s2)
+     (let ((s1 (if (mature? s1) s1 (pullup-mature-streams s1))))
+       (cond ((not s1) s2)
+             ((pair? s1)
+              (cons (car s1)
+                    (mplus (cdr s1) s2)))
+             (else (mplus s1 s2)))))
+    ((bind s g)
+     (let ((s (if (mature? s) s (pullup-mature-streams s))))
+       (cond ((not s) #f)
+             ((pair? s)
+              (mplus (pause (car s) g)
+                     (bind (cdr s) g)))
+             (else (bind s g)))))
+    ((pause st g) (mustart st g))
+    (_ s)))
+
+(define (step-left s)
+  (match s
+    ((mplus s1 s2)
+     (let ((s1 (if (mature? s1) s1 (a-step s1))))
+       (cond ((not s1) s2)
+             ((pair? s1)
+              (cons (car s1)
+                    (mplus (cdr s1) s2)))
+             (else (mplus s1 s2)))))
+    ((bind s g)
+     (let ((s (if (mature? s) s (a-step s))))
+       (cond ((not s) #f)
+             ((pair? s)
+              (mplus (pause (car s) g)
+                     (bind (cdr s) g)))
+             (else (bind s g)))))
+    ((pause st g) (a-start st g))
+    (_            s)))
+
+(define (step-right s)
+  (match s
+    ((mplus s1 s2)
+     (let ((s1 (if (mature? s2) s2 (a-step s2))))
+       (cond ((not s2) s1)
+             ((pair? s2)
+              (cons (car s2)
+                    (mplus s1 (cdr s2))))
+             (else (mplus s1 s2)))))
+    ((bind s g)
+     (let ((s (if (mature? s) s (a-step s))))
+       (cond ((not s) #f)
+             ((pair? s)
+              (mplus (pause (car s) g)
+                     (bind (cdr s) g)))
+             (else (bind s g)))))
+    ((pause st g) (a-start st g))
+    (_            s)))
+
+(define (final-step s)
+  (match s
+    ((mplus s1 s2)
+     (raise (format "Didn't expect mplus in final step.~n~a~n" s)))
+    ((bind s g)
+     (let ((s (if (mature? s) s (a-step s))))
+       (cond ((not s) #f)
+             ((pair? s)
+              (mplus (pause (car s) g)
+                     (bind (cdr s) g)))
+             (else (bind s g)))))
+    ((pause st g) (a-start st g))
+    (`(,st . ,s) s)
+    (_           s)))
+
+(define (step/path path s)
+  (match s
+    ((mplus s1 s2)
+     (if (= 0 (car path))
+         (let ((s1 (if (mature? s1) s1 (step/path (cdr path) s1))))
+           (cond ((not s1) s2)
+                 ((pair? s1)
+                  (cons (car s1)
+                        (mplus (cdr s1) s2)))
+                 (else (mplus s1 s2))))
+         (let ((s2 (if (mature? s2) s2 (step/path (cdr path) s2))))
+           (cond ((not s2) s1)
+                 ((pair? s2)
+                  (cons (car s2)
+                        (mplus s1 (cdr s2))))
+                 (else (mplus s1 (cdr s2)))))))
+    ((bind s g)
+     (let ((s (if (mature? s) s (step/path (cdr path) s))))
+       (cond ((not s) #f)
+             ((pair? s)
+              (step (mplus (pause (car s) g)
+                           (bind (cdr s) g))))
+             (else (bind s g)))))
+    ((pause st g) (start st g))
+    (_ s)))
+
+(let* ((s (query (a b) (appendo a b '(1 2 3 4))))
+       (step (lambda (path s) (simplify (step/path path s)))))
+  (list
+   s
+   (a-step s)
+   (step '(0) (a-step s))
+   (step '(0) (step '(0) (a-step s)))
+  
+   ))
+
+(let* ((s (query (a b) (appendo a b '(1 2 3 4))))
+       (step (lambda (path s) (simplify (step/path path s)))))
+  (list
+   s
+   (a-step s)
+   (step '(1) (a-step s))
+   (step '(1) (step '(1) (a-step s)))
+   (step '(1) (step '(1) (step '(1) (a-step s))))
+   ))
+
+;; (begin (zmq-close sock) (kill-thread t))
+;; (define sock (zmq-socket 'pair))
+;; (define t (responder-thread sock))
+
 
 
 ;; (define test-threa
