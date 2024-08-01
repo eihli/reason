@@ -1064,19 +1064,6 @@
            (take/path path n s))))))
   take/path)
 
-(define (responder-thread sock)
-  (thread
-   (lambda ()
-     (with-output-to-file "/tmp/foo"
-       (lambda ()
-         (zmq-bind sock "tcp://127.0.0.5:5555")
-         (display (format "bound~n"))
-         (let* ((take/path (nas-server sock))
-                (s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
-           (take/path '(0) 8 s)))
-       #:exists 'truncate/replace))))
-
-
 (define (a-start st g)
   (match g
     ((disj g1 g2)
@@ -1247,32 +1234,6 @@
     ((pause st g) (start st g))
     (_ s)))
 
-(let* ((s (query (a b) (appendo a b '(1 2 3 4))))
-       (step (lambda (path s) (simplify (step/path path s)))))
-  (list
-   s
-   (a-step s)
-   (step '(0) (a-step s))
-   (step '(0) (step '(0) (a-step s)))
-  
-   ))
-
-(let* ((s (query (a b) (appendo a b '(1 2 3 4))))
-       (step (lambda (path s) (simplify (step/path path s)))))
-  (list
-   s
-   (a-step s)
-   (step '(1) (a-step s))
-   (step '(1) (step '(1) (a-step s)))
-   (step '(1) (step '(1) (step '(1) (a-step s))))
-   ))
-
-;; (begin (zmq-close sock) (kill-thread t))
-;; (define sock (zmq-socket 'pair))
-;; (define t (responder-thread sock))
-
-
-
 ;; (define test-threa
 ;;   (thread
 ;;    (lambda ()
@@ -1286,3 +1247,137 @@
 ;;        (take/nas (make-take/nas requester))
 ;;        (choose (make-choose requester)))
 ;;   (take/nas choose 8 s))
+
+(define (ask sock s)
+  (zmq-send sock (string->bytes/utf-8 (format "Stream:~n~a~n~nWhich path do you want to take? [0, 1]~n"
+                                              (string->bytes/utf-8 (pp/stream 0 s))))))
+(define (rcv sock)
+  (parse-integer (string->bytes/utf-8 (zmq-recv-string sock))))
+
+(define (turn d s1 s2)
+  (if (= 0 d)
+      `(,s1 . ,s2)
+      `(,s2 . ,s1)))
+
+(define (omature? s) (or (not s) (pair? s)))
+(define (omature step s)
+  (if (mature? s) s (mature (step s))))
+
+(define (ostart step st g)
+  (match g
+    ((disj g1 g2)
+     (step (mplus (pause st g1)
+                  (pause st g2))))
+    ((conj g1 g2)
+     (step (bind (pause st g1) g2)))
+    ((relate thunk _)
+     (pause st (thunk)))
+    ((== t1 t2) (state->stream (unify t1 t2 st)))
+    ((=/= t1 t2) (state->stream (disunify t1 t2 st)))
+    ((symbolo t) (state->stream (typify t symbol? st)))
+    ((stringo t) (state->stream (typify t string? st)))
+    ((numbero t) (state->stream (typify t number? st)))
+    ((not-symbolo t) (state->stream (distypify t symbol? st)))
+    ((not-stringo t) (state->stream (distypify t string? st)))
+    ((not-numbero t) (state->stream (distypify t number? st)))))
+
+(define (make-ostep sock)
+  (define (ostep s)
+    (format "~a~n" (pp/stream 0 s))
+    (flush-output (current-output-port))
+    (match s
+      ((mplus s1 s2)
+       (ask sock s)
+       (let ((direction (rcv sock)))
+         (if (= direction 0)
+             (let ((s1 (if (mature? s1) s1 (ostep s1))))
+               (cond ((not s1) s2)
+                     ((pair? s1)
+                      (cons (car s1)
+                            (mplus (cdr s1) s2)))
+                     (else (mplus s1 s2))))
+             (let ((s2 (if (mature? s2) s2 (ostep s2))))
+               (cond ((not s2) s1)
+                     ((pair? s2)
+                      (cons (car s2)
+                            (mplus s1 (cdr s2))))
+                     (else (mplus s1 s2)))))))
+      ((bind s g)
+       (let ((s (if (mature? s) s (ostep s))))
+         (cond ((not s) #f)
+               ((pair? s)
+                (ostep (mplus (pause (car s) g)
+                              (bind (cdr s) g))))
+               (else (bind s g)))))
+      ((pause st g) (ostart ostep st g))
+      (_            s)))
+  ostep)
+
+(define output (open-output-string))
+
+(define (exc-handler exc)
+  (displayln (format "Exception: ~a~n" (raise-user-error exc))))
+
+(define (responder-thread sock)
+  (thread
+   (lambda ()
+     (with-handlers ([exn:fail? exc-handler])
+       (with-output-to-file "/tmp/foo"
+         (lambda ()
+           (zmq-bind sock "tcp://127.0.0.5:5555")
+           (display (format "bound~n") output)
+           (let* ((s (query (a b) (appendo a b '(1 2 3 4))))
+                  (ostep (make-ostep sock))
+                  (step (lambda (s) (simplify (ostep s)))))
+             (stream-take/step step 8 s)))
+         #:exists 'truncate/replace)
+       (error "An error occurred in the thread")))))
+
+(define sock (zmq-socket 'pair))
+(zmq-bind sock "tcp://127.0.0.5:5555")
+;; (define t (responder-thread sock))
+
+;;(begin (zmq-close sock) (kill-thread t))
+(define (send sock msg)
+  (zmq-send sock (string->bytes/utf-8 (format "~a~n"
+                                              (string->bytes/utf-8 msg)))))
+
+(define (ostream-take/step step n s)
+  (if (eqv? 0 n) '()
+      (let ((s (mature/step step s)))
+        (if (pair? s)
+            (begin (send sock (format "Solution: ~a~n" (reify/initial-var (car s))))
+                   (cons (car s) (ostream-take/step step (and n (- n 1)) (cdr s))))
+            '()))))
+
+(define (orun)
+  (display (format "bound~n") output)
+  (let* ((s (query (a b) (appendo a b '(1 2 3 4))))
+         (ostep (make-ostep sock))
+         (step (lambda (s) (simplify (ostep s)))))
+    (ostream-take/step step 8 s)))
+
+(map reify/initial-var (orun))
+
+
+(let ((q (query (a b) (appendo a b '(1 2 3 4)))))
+  q)
+
+;; What does this equal?
+(append '(1 2) '(3 4))
+
+;; What must "a" equal for the following to be true?
+(append     a  '(3 4)) == '(1 2 3 4)
+
+;; What must "a" and "b" equal for the following to be true?
+(append     a       b) == '(1 2 3 4)
+
+
+
+
+
+(run* (q)   (appendo '(1 2) '(3 4) q))
+
+(run* (a)   (appendo      a '(3 4) '(1 2 3 4)))
+
+(run* (a b) (appendo      a      b '(1 2 3 4)))
