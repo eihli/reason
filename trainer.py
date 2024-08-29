@@ -1,15 +1,14 @@
-import random
 import struct
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data.dataloader import DataLoader
-from torchvision import datasets
 import torchvision.transforms.v2 as transforms
 import zmq
+from torch.utils.data.dataloader import DataLoader
+from torchvision import datasets
 
-
-from compiler import parse_architectures, tokenize, sample_architectures, parse_choices
+from compiler import parse_architectures, sample_architectures, tokenize
 
 mnist = datasets.MNIST(
     "~/.data",
@@ -47,9 +46,16 @@ def run(architectures):
 architectures = parse_architectures(tokenize(sample_architectures), 0)
 model = nn.Sequential(nn.Flatten(), *architectures[0])
 
+class DQN(nn.Module):
+    def __init__(self):
+        pass
+
+    def forward(self, x):
+        return
 
 def make_decision(choices):
     return random.randint(0, len(choices) - 1)
+
 
 # https://learning-0mq-with-pyzmq.readthedocs.io/en/latest/pyzmq/patterns/pair.html
 def run_server():
@@ -67,5 +73,6 @@ def run_server():
             print(f"Received {choice} but expected an integer.")
             continue
         socket.send(struct.pack("!i", choice))
+
 
 run_server()

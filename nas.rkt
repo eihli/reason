@@ -823,16 +823,12 @@
         (_            s))))
   stepper)
 
-(let ((mustep (path-stepper '(0 0 0)))
-      (s (simplify (query (q) (layerso q '(0 0 1) '(0 1))))))
+(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
   (let ((simple-stepper (lambda (s) (simplify (mustep s)))))
     (list
      s
      (simple-stepper s)
-     (simple-stepper (simple-stepper s))
-     (simple-stepper (simple-stepper (simple-stepper s)))
-     (simple-stepper (simple-stepper (simple-stepper (simple-stepper s))))
-     (simple-stepper (simple-stepper (simple-stepper (simple-stepper (simple-stepper s))))))))
+     (simple-stepper (simple-stepper s)))))
 
 (define (spaces i)
   (make-string i #\space))
@@ -1125,13 +1121,13 @@
            ((pair? s1)
             (cons (car s1)
                   (mplus (cdr s1) s2)))
-           (else (mplus s1 s2))))
+           (else (mplus (mustep s1) s2))))
     ((bind s g)
      (cond ((not s) #f)
            ((pair? s)
             (mplus (pause (car s) g)
                    (bind (cdr s) g)))
-           (else (bind s g))))
+           (else (bind (mustep s) g))))
     ((pause st g) (mustart st g))
     (_ s)))
 
@@ -1357,22 +1353,20 @@
          (step (lambda (s) (simplify (ostep s)))))
     (ostream-take/step step 8 s)))
 
-(map reify/initial-var (orun))
+;; (map reify/initial-var (orun))
 
 
 (let ((q (query (a b) (appendo a b '(1 2 3 4)))))
-  q)
+  (q))
 
 ;; What does this equal?
 (append '(1 2) '(3 4))
 
 ;; What must "a" equal for the following to be true?
-(append     a  '(3 4)) == '(1 2 3 4)
+;; (append     a  '(3 4)) == '(1 2 3 4)
 
 ;; What must "a" and "b" equal for the following to be true?
-(append     a       b) == '(1 2 3 4)
-
-
+;; (append     a       b) == '(1 2 3 4)
 
 
 
