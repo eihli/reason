@@ -24,7 +24,11 @@ Imagine we want a search strategy that, instead, outputs the results with a pref
   (1 2 3 4) ())
 ---
 
-How would we change miniKanren to allow that?
+Can we train a neural network to learn that search strategy?
+
+Will it generalize? If we train the search strategy on `(appendo a b (1 2 3 4))` and on `(appendo a b (1 2 3 4 5))`, will it perform properly on `(appendo a b (1 2 3 4 5 6))`, returning `((1 2 3) (4 5 6))` as the first result? My gut tells me it won't. If it doesn't, is this even worthwhile? Is there a way to confirm or disconfirm my gut feeling with pure thought; without running the code?
+
+Let's say we want to just write the code, regardless of caveats. How would we change miniKanren to allow that?
 
 We need a way to, when faced with a choice (a disjunction), ask some external system which path of the disjunction we should take in order to arrive at our results in the desired order.
 
@@ -66,6 +70,8 @@ The original `stream-take` looks like this:
             '()))))
 ---
 
+And `stream-take` with a custom `step` looks like this.
+
 --- stream-take/step --- noTangle
 (define (stream-take/step step n s)
   (if (eqv? 0 n)
@@ -82,15 +88,13 @@ I'm going to take a break right here from going into every little detail step-by
 
 [Greg Rosenblatt's first-order-miniKanren](https://github.com/gregr/first-order-miniKanren) already gives us all of those `<foo>/step`-like functions. We don't need any changes to that system. The only thing we need to do is define our custom chooser.
 
-TODO: With one small caveat. It's not related to the `step` stuff. It's related to how the results are produced. I think we'd benefit from having the results streamed to some external process, rather than accumulated with `cons` and returned at the end. We're going to be searching an infinite search space (all possible neural network architectures) and we want to be able to train on results as the search is ongoing (or, just in general, have access to the results before an infinite search never finishes).
-
 Ok.
 
 So.
 
 If the only thing we need to change (ignoring that TODO for a moment) is the `step` function, then what will our custom `step` look like?
 
---- step that asks for disj decision
+--- step that asks for disj decision v1 --- noTangle
 (define (stepper choose)
   (lambda (s)
     (match s
@@ -118,7 +122,121 @@ If the only thing we need to change (ignoring that TODO for a moment) is the `st
      (_ s))))
 ---
 
-(It's kind of weird that, when you `step` `'left`, the streams get re-ordered, such that to `step` down that path again you subsequently need to `step` `'right`. But it's not a trival fix because then we need to handle the case where `s2` is a pair. I just don't want to deal with that right now. But it would be nice, eventually.)
+It's kind of weird that, when you `step` `'left`, the streams get re-ordered, such that to `step` down that path again you subsequently need to `step` `'right`. We just need to handle the case where `s2` is mature.
+
+Let's make it happen.
+
+--- step that asks for disj decision
+(define (stepper choose)
+  (lambda (s)
+    (match s
+     ((mplus s1 s2)
+      (let ((s1 (simplify s1))
+            (s2 (simplify s2)))
+        (cond
+         ((not s1) s2)
+         ((not s2) s1)
+         ;; It's not possible for both s1 and s2 to be pairs.
+         ;; (Assuming this code is written correctly as I intended.)
+         ((pair? s1)
+          (cons (car s1)
+                (mplus (cdr s1) s2)))
+         ((pair? s2)
+          (cons (car s2)
+                (mplus s1 (cdr s2))))
+         (else
+          (let ((path (choose s1 s2)))
+            (if (eq? 'left path)
+              (mplus (step s1) s2)
+              (mplus s1 (step s2))))))))
+     ((bind s g)
+      (cond
+       ((not s) #f)
+       ((pair? s)
+        (mplus (pause (car s) g)
+               (bind (cdr s) g)))
+       (else (bind (step s) g))))
+     ((pause st g) (start st g))
+     (_ s))))
+---
+
+This change is unfortunate in one way: with the previous stepper, we could get the biased interleaving behavior of typical miniKanren by simply having a chooser that always chose the `'left` path. Now, we'll need an entirely new stepper function to get that behavior.
+
+Such is life. Let's proceed.
+
+There's one more minor change we need to make.
+
+It's not related to the `step` stuff. It's related to how the results are produced. I think we'd benefit from having the results streamed to some external process, rather than accumulated with `cons` and returned at the end. We might be searching an infinite search space (all possible neural network architectures) and we want to be able to work with the results as the search is ongoing.
+
+Remember what our `stream-take/step` looked like?
+
+--- stream-take/step --- noTangle
+(define (stream-take/step step n s)
+  (if (eqv? 0 n)
+      '()
+      (let ((s (mature/step step s)))
+        (if (pair? s)
+            (cons (car s) (stream-take/step step (and n (- n 1)) (cdr s)))
+            '()))))
+---
+
+It builds the list of results by using `cons` every time the stream matures.
+
+Instead, let's include an `out` parameter that takes a mature stream and does whatever it wants with it; print it, send it to another process... whatever.
+
+--- stream-out/step
+(define (stream-out/step out step n s)
+  (if (eqv? 0 n)
+      (out '())
+      (let ((s (mature/step step s)))
+        (if (pair? s)
+            (begin
+              (out (reify/initial-var (car s)))
+              (stream-out/step out step (and n (- n 1)) (cdr s)))
+            (out '())))))
+---
+
+Now. Since we are replacing `stream-take/step` with `stream-out/step`, we also need to write a new `run/step`.
+
+The original `run/step` looks like this:
+
+--- run/step --- noTangle
+(define-syntax run/step
+  (syntax-rules ()
+    ((_ step n body ...) (map reify/initial-var (stream-take/step
+                                                 step n (query body ...))))))
+---
+
+We just need to replace `stream-take/step` with our new `stream-out/step`.
+
+--- run-out/step
+(define-syntax run-out/step
+  (syntax-rules ()
+    ((_ out step n body ...)
+     (stream-out/step out step n (query body ...)))))
+---
+
+
+### Output to a background thread
+
+--- background thread for handling results
+(define (out/stdout channel)
+  (let loop ()
+    (define message (channel-get channel))
+    (cond
+      ((equal? message "end")
+       (printf "Received \"end\" message. Terminating thread.~n"))
+      (else
+       (printf "Received ~a~n" message)
+       (loop)))))
+
+(define (start-stdout-thread)
+  (define message-channel (make-channel))
+  (define listener-thread (thread (lambda () (out/stdout message-channel))))
+  (define (send-message msg) (channel-put message-channel msg))
+  (values message-channel listener-thread send-message))
+---
+
 
 ### Path-choosers
 
@@ -148,7 +266,11 @@ If the only thing we need to change (ignoring that TODO for a moment) is the `st
 
 @{step that asks for disj decision}
 @{stdin path chooser}
+@{stream-out/step}
+@{run-out/step}
+@{background thread for handling results}
 
+(define-values (chan thrd smsg) (start-stdout-thread))
 (define step (stepper stdin-chooser))
 
 (define-relation (appendo a b ab)
@@ -159,7 +281,7 @@ If the only thing we need to change (ignoring that TODO for a moment) is the `st
       (== ab `(,a1 . ,res))
       (appendo a2 b res)))))
 
-(run/step step 2 (a b) (appendo a b '(1 2 3 4)))
+(run-out/step smsg step 2 (a b) (appendo a b '(1 2 3 4)))
 ---
 
 
@@ -172,7 +294,7 @@ If the only thing we need to change (ignoring that TODO for a moment) is the `st
 
 @{step that asks for disj decision}
 @{stdin path chooser}
-@{start}
+@{stream-out/step}
 ---
 
 ## Choosing Which Path To Explore
@@ -180,80 +302,6 @@ If the only thing we need to change (ignoring that TODO for a moment) is the `st
 At a high-level, we want to use the existing first-order miniKanren implementation with one minor change: we want `mature` to step until it gets to a disjunction, and then we want to ask another process which path we should take.
 
 QUESTION: What information will the decision-making process need? Will it have everything it needs in the disjuction? Will we need to expand the children of the disjunction to get more information? Will we need to keep track of the path we took to get to the disjunction (all of the conjuctions along the way)?
-
-### Step
-
-The typical implementation `step`s `s1`, early, if it's not `#f` or a `pair`.
-
-```
-(let ((s1 (if (mature? s1) s1 (step s1))))
-     ...)
-```
-
-We don't know if we want to `step` `s1` or `s2` until we ask `choose`, our decision-maker. So, we have to modify `step` a little bit.
-
---- step that asks for disj decision v1
-(define (stepper choose)
-  (lambda (s)
-    (match s
-     ((mplus s1 s2)
-      (cond
-       ((not s1) s2)
-       ((pair? s1)
-        (cons (car s1)
-              (mplus (cdr s1) s2)))
-       (else
-        (let ((path (choose s1 s2)))
-          (if (eq? 'left path)
-            (mplus (step s1) s2)
-            (mplus (step s2) s1))))))
-     ((bind s g)
-      (cond
-       ((not s) #f)
-       ((pair? s)
-        (mplus (pause (car s) g)
-               (bind (cdr s) g)))
-       (else (bind (step s) g))))
-     ((pause st g) (start st g))
-     (_ s))))
----
-
-### Path-choosers
-
---- stdin path chooser v1
-(define (stdin-chooser)
-  (printf "left or right? ")
-  (do ((user-input (string->symbol (read-line))
-                   (begin
-                    (printf "~a is an invalid input~n" user-input)
-                    (printf "left or right? ")
-                    (string->symbol (read-line)))))
-      ((or (eq? user-input 'left) (eq? user-input 'right)) user-input)))
----
-
-### Start
-
---- start
-(define (start st g)
-  (match g
-    ((disj g1 g2)
-     (step (mplus (pause st g1)
-                  (pause st g2))))
-    ((conj g1 g2)
-     (step (bind (pause st g1) g2)))
-    ((relate thunk _)
-     (pause st (thunk)))
-    ((== t1 t2) (state->stream (unify t1 t2 st)))
-    ((=/= t1 t2) (state->stream (disunify t1 t2 st)))
-    ((symbolo t) (state->stream (typify t symbol? st)))
-    ((stringo t) (state->stream (typify t string? st)))
-    ((numbero t) (state->stream (typify t number? st)))
-    ((not-symbolo t) (state->stream (distypify t symbol? st)))
-    ((not-stringo t) (state->stream (distypify t string? st)))
-    ((not-numbero t) (state->stream (distypify t number? st)))))
----
-
-
 
 --- requires
 (only-in racket/match match)

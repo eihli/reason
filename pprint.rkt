@@ -29,7 +29,8 @@
 ;;     == (1 2 3 4) (1 2 3 4)
 #lang racket/base
 
-(provide pp/stream
+(provide pp/state
+         pp/stream
          pp/goal)
 
 (require (only-in racket/match match)
