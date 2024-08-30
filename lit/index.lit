@@ -1,5 +1,9 @@
 # Neural Guided Constraint Logic Search For Neural Network Architectures
 
+@toc
+
+## Overview
+
 --- high level example --- noTangle
 (run (a b) (appendo a b '(1 2 3 4)))
 ---
@@ -31,6 +35,8 @@ Will it generalize? If we train the search strategy on `(appendo a b (1 2 3 4))`
 Let's say we want to just write the code, regardless of caveats. How would we change miniKanren to allow that?
 
 We need a way to, when faced with a choice (a disjunction), ask some external system which path of the disjunction we should take in order to arrive at our results in the desired order.
+
+## Stepping through the search tree
 
 Since `step` is the function that handles re-ordering disjunctions, we'll need to be able to give `run` a custom `step` function.
 
@@ -92,7 +98,7 @@ Ok.
 
 So.
 
-If the only thing we need to change (ignoring that TODO for a moment) is the `step` function, then what will our custom `step` look like?
+If the only thing we need to change is the `step` function, then what will our custom `step` look like?
 
 --- step that asks for disj decision v1 --- noTangle
 (define (stepper choose)
@@ -164,6 +170,8 @@ This change is unfortunate in one way: with the previous stepper, we could get t
 
 Such is life. Let's proceed.
 
+## Streaming output instead of building up a result with `cons`
+
 There's one more minor change we need to make.
 
 It's not related to the `step` stuff. It's related to how the results are produced. I think we'd benefit from having the results streamed to some external process, rather than accumulated with `cons` and returned at the end. We might be searching an infinite search space (all possible neural network architectures) and we want to be able to work with the results as the search is ongoing.
@@ -217,14 +225,14 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
 ---
 
 
-### Output to a background thread
+## Output to a background thread
 
 --- background thread for handling results
 (define (out/stdout channel)
   (let loop ()
     (define message (channel-get channel))
     (cond
-      ((equal? message "end")
+      ((equal? message '())
        (printf "Received \"end\" message. Terminating thread.~n"))
       (else
        (printf "Received ~a~n" message)
@@ -236,7 +244,6 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
   (define (send-message msg) (channel-put message-channel msg))
   (values message-channel listener-thread send-message))
 ---
-
 
 ### Path-choosers
 
@@ -253,7 +260,7 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
       ((or (eq? user-input 'left) (eq? user-input 'right)) user-input)))
 ---
 
-### Test
+## Test what we have so far
 
 --- /test.rkt
 #lang racket/base
@@ -282,8 +289,11 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
       (appendo a2 b res)))))
 
 (run-out/step smsg step 2 (a b) (appendo a b '(1 2 3 4)))
+
+(thread-wait thrd)
 ---
 
+## The code – neural-architecture-search.rkt
 
 --- /neural-architecture-search.rkt
 #lang racket/base
@@ -297,15 +307,15 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
 @{stream-out/step}
 ---
 
-## Choosing Which Path To Explore
-
-At a high-level, we want to use the existing first-order miniKanren implementation with one minor change: we want `mature` to step until it gets to a disjunction, and then we want to ask another process which path we should take.
-
-QUESTION: What information will the decision-making process need? Will it have everything it needs in the disjuction? Will we need to expand the children of the disjunction to get more information? Will we need to keep track of the path we took to get to the disjunction (all of the conjuctions along the way)?
-
 --- requires
 (only-in racket/match match)
 first-order-miniKanren/microk-fo
 first-order-miniKanren/tools
 racket/serialize
 ---
+
+## A note for the future: choosing Which Path To Explore
+
+At a high-level, we want to use the existing first-order miniKanren implementation with one minor change: we want `mature` to step until it gets to a disjunction, and then we want to ask another process which path we should take.
+
+QUESTION: What information will the decision-making process need? Will it have everything it needs in the disjuction? Will we need to expand the children of the disjunction to get more information? Will we need to keep track of the path we took to get to the disjunction (all of the conjuctions along the way)?
