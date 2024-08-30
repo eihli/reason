@@ -21,24 +21,6 @@
   (conde ((nevero x))
          ((alwayso x))))
 
-(define-relation (color c)
-  (conde ((== c 'red))
-         ((== c 'green))
-         ((== c 'blue))
-         ((== c 'cyan))
-         ((== c 'magenta))
-         ((== c 'yellow))
-         ((== c 'black))
-         ((== c 'white))))
-(define-relation (shape s)
-  (conde ((== s 'circle))
-         ((== s 'triangle))
-         ((== s 'rectangle))
-         ((== s 'pentagon))
-         ((== s 'hexagon))))
-(define-relation (shape-or-color sc)
-  (conde ((shape sc)) ((color sc))))
-
 ;; This is an interpreter for a simple Lisp.  Variables in this language are
 ;; represented namelessly, using De Bruijn indices.
 ;; Because it is implemented as a relation, we can run this interpreter with
