@@ -823,13 +823,6 @@
         (_            s))))
   stepper)
 
-(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
-  (let ((simple-stepper (lambda (s) (simplify (mustep s)))))
-    (list
-     s
-     (simple-stepper s)
-     (simple-stepper (simple-stepper s)))))
-
 (define (spaces i)
   (make-string i #\space))
 
@@ -1131,6 +1124,12 @@
     ((pause st g) (mustart st g))
     (_ s)))
 
+(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
+  (let ((simple-stepper (lambda (s) (simplify (mustep s)))))
+    (list
+     s
+     (simple-stepper s)
+     (simple-stepper (simple-stepper s)))))
 
 (define (pullup-mature-streams s)
   (match s
@@ -1355,7 +1354,6 @@
 
 ;; (map reify/initial-var (orun))
 
-
 (let ((q (query (a b) (appendo a b '(1 2 3 4)))))
   (q))
 
@@ -1367,7 +1365,6 @@
 
 ;; What must "a" and "b" equal for the following to be true?
 ;; (append     a       b) == '(1 2 3 4)
-
 
 
 (run* (q)   (appendo '(1 2) '(3 4) q))

@@ -38,13 +38,13 @@ We need a way to, when faced with a choice (a disjunction), ask some external sy
 
 ## Stepping through the search tree
 
-Since `step` is the function that handles re-ordering disjunctions, we'll need to be able to give `run` a custom `step` function.
+Since `step` is the function that handles re-ordering disjunctions [see here](https://github.com/gregr/first-order-miniKanren/blob/d3671fd64e99d90ce6cea5b4fa2299591ff4e389/microk-fo.rkt#L70), we'll need to be able to give `run` a custom `step` function.
 
 --- high level example --- noTangle
 (run step (a b) (appendo a b '(1 2 3 4)))
 ---
 
-`step` is going vary based on which "path chooser" we are using. If we want `step` to reach out to `sdtin` for decisions, that will be one possible `step` function that we'd pass in. But if we want it to reach out to a separate process which is running a neural network to make decisions, then that would be a different `step` function.
+`step` is going vary based on which "path chooser" we are using. If we want `step` to reach out to `stdin` for decisions, that will be one possible `step` function that we'd pass in. But if we want it to reach out to a separate process which is running a neural network to make decisions, then that would be a different `step` function.
 
 The original miniKanren run looks like this:
 
@@ -59,7 +59,7 @@ Since we need a custom `step` function, we'll need to make a slight adjustment.
 --- run/step --- noTangle
 (define-syntax run/step
   (syntax-rules ()
-    ((_ n step body ...) (map reify-initial-var (stream-take n step (query body ...))))))
+    ((_ n step body ...) (map reify/initial-var (stream-take n step (query body ...))))))
 ---
 
 Which means we'll need a custom `stream-take`.
@@ -113,7 +113,7 @@ If the only thing we need to change is the `step` function, then what will our c
           (cons (car s1)
                 (mplus (cdr s1) s2)))
          (else
-          (let ((path (choose s1 s2)))
+          (let ((path (choose s1 s2)))       ; <-- `choose` which path to take
             (if (eq? 'left path)
               (mplus (step s1) s2)
               (mplus (step s2) s1)))))))
@@ -128,7 +128,7 @@ If the only thing we need to change is the `step` function, then what will our c
      (_ s))))
 ---
 
-It's kind of weird that, when you `step` `'left`, the streams get re-ordered, such that to `step` down that path again you subsequently need to `step` `'right`. We just need to handle the case where `s2` is mature.
+It's kind of weird that, when you `step` `'left`, the streams get re-ordered, such that to `step` down that path again you subsequently need to `step` `'right`. If we don't want to re-order the streams, then we just need to handle the case where `s2` is mature.
 
 Let's make it happen.
 
@@ -147,11 +147,11 @@ Let's make it happen.
          ((pair? s1)
           (cons (car s1)
                 (mplus (cdr s1) s2)))
-         ((pair? s2)
+         ((pair? s2)                         ; <- additional check if s2 is `mature`
           (cons (car s2)
                 (mplus s1 (cdr s2))))
          (else
-          (let ((path (choose s1 s2)))
+          (let ((path (choose s1 s2)))       ; <- `choose` which path to take
             (if (eq? 'left path)
               (mplus (step s1) s2)
               (mplus s1 (step s2))))))))
@@ -199,7 +199,7 @@ Instead, let's include an `out` parameter that takes a mature stream and does wh
       (let ((s (mature/step step s)))
         (if (pair? s)
             (begin
-              (out (reify/initial-var (car s)))
+              (out (car s))
               (stream-out/step out step (and n (- n 1)) (cdr s)))
             (out '())))))
 ---
@@ -211,8 +211,8 @@ The original `run/step` looks like this:
 --- run/step --- noTangle
 (define-syntax run/step
   (syntax-rules ()
-    ((_ step n body ...) (map reify/initial-var (stream-take/step
-                                                 step n (query body ...))))))
+    ((_ step n body ...)
+     (map reify/initial-var (stream-take/step step n (query body ...))))))
 ---
 
 We just need to replace `stream-take/step` with our new `stream-out/step`.
@@ -225,7 +225,7 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
 ---
 
 
-## Output to a background thread
+## Writing results to a socket
 
 --- background thread for handling results
 (define (out/stdout channel)
@@ -235,7 +235,7 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
       ((equal? message '())
        (printf "Received \"end\" message. Terminating thread.~n"))
       (else
-       (printf "Received ~a~n" message)
+       (printf "Received ~a~n" (reify/initial-var message))
        (loop)))))
 
 (define (start-stdout-thread)
