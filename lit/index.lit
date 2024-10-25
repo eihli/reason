@@ -247,7 +247,39 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
 ---
 
 
-## Writing results to a socket
+## Writing results to... something.
+
+I don't know exactly what the interface is going to be for how the miniKanren program talks to the outside world. I expect I'm going to want a stdin/stdout option. And then, maybe a file option for logging? Maybe TCP for communicating with an inference engine?
+
+--- /io.rkt
+#lang racket
+(require racket/tcp
+         first-order-miniKanren/common)
+
+(provide
+ make-stdout-handler
+ make-tcp-handler
+ output-handler
+ output-handler-send
+ output-handler-close)
+
+(struct output-handler (send close) #:transparent)
+
+(define (make-stdout-handler)
+  (output-handler
+   (lambda (msg)
+     (printf "~a~n" (reify/initial-var msg)))
+   void))
+
+(define (make-tcp-handler hostname port)
+  (define-values (in out) (tcp-connect hostname port))
+  (output-handler
+    (lambda (msg)
+      (fprintf out "~a~n" (reify/initial-var msg))
+      (flush-output out))
+    (lambda ()
+      (close-output-port out))))
+---
 
 --- background thread for handling results
 (define (out/stdout channel)
@@ -291,7 +323,8 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
   first-order-miniKanren/microk-fo
   first-order-miniKanren/tools
   "pprint.rkt"
-  "simplify.rkt")
+  "simplify.rkt"
+  "io.rkt")
 
 @{step that asks for disj decision}
 @{stdin path chooser}
@@ -315,6 +348,10 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
 (thread-wait thrd)
 ---
 
+## Flattening our choices.
+
+
+
 ## The code – neural-architecture-search.rkt
 
 --- /neural-architecture-search.rkt
@@ -334,6 +371,7 @@ We just need to replace `stream-take/step` with our new `stream-out/step`.
 first-order-miniKanren/microk-fo
 first-order-miniKanren/tools
 racket/serialize
+"io.rkt"
 ---
 
 ## A note for the future: choosing Which Path To Explore
