@@ -154,15 +154,15 @@ Let's make it happen.
          (else
           (let ((path (choose s1 s2)))       ; <- `choose` which path to take
             (if (eq? 'left path)
-              (mplus (step s1) s2)
-              (mplus s1 (step s2))))))))
+              (mplus (simplify ((stepper choose) s1)) s2)
+              (mplus s1 (simplify ((stepper choose) s2)))))))))
      ((bind s g)
       (cond
        ((not s) #f)
        ((pair? s)
         (mplus (pause (car s) g)
                (bind (cdr s) g)))
-       (else (bind (step s) g))))
+       (else (bind (simplify ((stepper choose) s)) g))))
      ((pause st g) (start st g))
      (_ s))))
 ---
@@ -317,6 +317,130 @@ I don't know exactly what the interface is going to be for how the miniKanren pr
       ((or (eq? user-input 'left) (eq? user-input 'right)) user-input)))
 ---
 
+# Relational ANN architecture
+
+We'll start simple.
+
+- Linear
+- ReLU
+- Dropout
+
+Linear can have anything for its `in` and `out`.
+
+ReLU has the constraint that its `in` and `out` are equal.
+
+Dropout has the constraint that its `in` and `out` are equal and that its `percent` is a number between 1 and 100.
+
+--- layers
+(define linearo
+  (lambda (q in out)
+    (== q `(Linear ,in ,out))))
+
+(define dropouto
+  (lambda (q in out)
+    (fresh (p)
+      (percento p)
+      (== in out)
+      (== q `(Dropout ,in ,out ,p)))))
+
+(define reluo
+  (lambda (q in out)
+    (conde
+     ((== in out)
+      (== q `(Relu ,in ,out))))))
+---
+
+--- layero
+(define-relation (layero layer in out)
+  (conde
+   ((linearo layer in out))
+   ((reluo layer in out))
+   ((dropouto layer in out))))
+---
+
+Layers are built by the disjunction of:
+
+- A layer with an `OUT` terminator at its end.
+- A layer with subsequent layers of arbitrary dimensions at its end.
+
+--- layerso
+(define-relation (layerso layers in out)
+  (conde
+   ((fresh (layer)
+           (layero layer in out)
+           (== layers `(,layer (OUT ,out)))))
+   ((fresh (layer-1 layer-2 hidden)
+           (dimso hidden)
+           (layero layer-1 in hidden)
+           (layerso layer-2 hidden out)
+           (== layers `(,layer-1 . ,layer-2))))))
+---
+
+--- relational utilities
+(define percento
+  (lambda (x)
+    (fresh (y)
+      (pluso x y (build-num 99)))))
+
+(define-relation (dimso q)
+  (<lo '() q)
+  (conde
+   ((== q `(1)))
+   ((tailo q 1))))
+
+(define-relation (tailo lst tail)
+  (fresh (a d rst)
+    (conde
+     ((== lst `(,a . ,d))
+      (disj*
+       (== a 1)
+       (== a 0))
+      (== d `(,tail . ())))
+     ((== lst `(,a . ,rst))
+      (disj*
+       (== a 1)
+       (== a 0))
+      (tailo rst tail)))))
+
+(define build-num
+  (lambda (n)
+    (cond
+      ((odd? n)
+       (cons 1
+         (build-num (quotient (- n 1) 2))))
+      ((and (not (zero? n)) (even? n))
+       (cons 0
+         (build-num (quotient n 2))))
+      ((zero? n) '()))))
+
+(define (one? n)
+  (= n 1))
+
+(define (unbuild-num n)
+  (let loop ((n n) (r 0) (i 0))
+    (cond
+     ((null? n) r)
+     ((one? (car n)) (loop (cdr n) (+ r (expt 2 i)) (add1 i)))
+     (else (loop (cdr n) r (add1 i))))))
+---
+
+--- /nasrel.rkt
+#lang racket
+(require
+  first-order-miniKanren/microk-fo
+  first-order-miniKanren/tools
+  "math.rkt")
+(provide layerso
+         build-num
+         unbuild-num)
+@{layers}
+@{layero}
+@{layerso}
+@{relational utilities}
+---
+
+# Tests
+
 ## Test what we have so far
 
 --- /test.rkt
@@ -351,9 +475,34 @@ I don't know exactly what the interface is going to be for how the miniKanren pr
 (thread-wait thrd)
 ---
 
+## Testing it with neural architecture search
+
+--- /test-nas.rkt
+#lang racket/base
+(require
+  (only-in racket/match match)
+  first-order-miniKanren/microk-fo
+  first-order-miniKanren/tools
+  "pprint.rkt"
+  "simplify.rkt"
+  "nasrel.rkt"
+  "io.rkt")
+
+@{step that asks for disj decision}
+@{stdin path chooser}
+@{stream-out/step}
+@{run-out/step}
+@{background thread for handling results}
+
+(define-values (chan thrd smsg) (start-stdout-thread))
+(define step (stepper stdin-chooser))
+
+(run-out/step smsg step 10 (q) (layerso q (build-num 8) (build-num 3)))
+
+(thread-wait thrd)
+---
+
 ## Flattening our choices.
-
-
 
 ## The code – neural-architecture-search.rkt
 
