@@ -239,6 +239,8 @@ The original `run/step` looks like this:
 
 We just need to replace `stream-take/step` with our new `stream-out/step`.
 
+We won't `reify/initial-var` this one, since that's an output/display behavior. We'll leave that behavior to whatever consumes the output.
+
 --- run-out/step
 (define-syntax run-out/step
   (syntax-rules ()
@@ -379,3 +381,235 @@ racket/serialize
 At a high-level, we want to use the existing first-order miniKanren implementation with one minor change: we want `mature` to step until it gets to a disjunction, and then we want to ask another process which path we should take.
 
 QUESTION: What information will the decision-making process need? Will it have everything it needs in the disjuction? Will we need to expand the children of the disjunction to get more information? Will we need to keep track of the path we took to get to the disjunction (all of the conjuctions along the way)?
+
+# Pretty printing
+
+--- /pprint.rkt
+;; The output format of this pretty printing is still kind of noisy.
+;; It makes it hard to find, by hand, the path you want.
+;;
+;; Example:
+;;
+;; left or right? right
+;; left:
+;; mplus
+;;   #s(state ((#s(var b 2) 3 4) (#s(var a2 7)) (#s(var res 8) 3 4) (#s(var a1 6) . 2) (#s(var a2 4) #s(var a1 6) . #s(var a2 7)) (#s(var res 5) 2 3 4) (#s(var a1 3) . 1) (#s(var a 1) #s(var a1 3) . #s(var a2 4)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
+;;   #f
+;;   mplus
+;;     pause
+;;       #s(state ((#s(var b 2) 4) (#s(var a2 10)) (#s(var res 11) 4) (#s(var a1 9) . 3) (#s(var a2 7) #s(var a1 9) . #s(var a2 10)) (#s(var res 8) 3 4) (#s(var a1 6) . 2) (#s(var a2 4) #s(var a1 6) . #s(var a2 7)) (#s(var res 5) 2 3 4) (#s(var a1 3) . 1) (#s(var a 1) #s(var a1 3) . #s(var a2 4)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
+;;       conj
+;;         == () ()
+;;         == (4) (4)
+;;     pause
+;;       #s(state ((#s(var res 14)) (#s(var a1 12) . 4) (#s(var a2 10) #s(var a1 12) . #s(var a2 13)) (#s(var res 11) 4) (#s(var a1 9) . 3) (#s(var a2 7) #s(var a1 9) . #s(var a2 10)) (#s(var res 8) 3 4) (#s(var a1 6) . 2) (#s(var a2 4) #s(var a1 6) . #s(var a2 7)) (#s(var res 5) 2 3 4) (#s(var a1 3) . 1) (#s(var a 1) #s(var a1 3) . #s(var a2 4)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
+;;       conj
+;;         (#<procedure:appendo> appendo #s(var a2 13) #s(var b 2) ())
+;;         == (4 . #s(var a2 13)) (4 . #s(var a2 13))
+;;         == (4) (4)
+;;
+;; right:
+;; pause
+;;   #s(state ((#s(var b 2) 1 2 3 4) (#s(var a 1)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
+;;   conj
+;;     == () ()
+;;     == (1 2 3 4) (1 2 3 4)
+#lang racket/base
+
+(provide pp/state
+         pp/stream
+         pp/goal)
+
+(require (only-in racket/match match)
+         first-order-miniKanren/microk-fo
+         first-order-miniKanren/mk-fo
+         first-order-miniKanren/tools
+         racket/serialize)
+
+(define (spaces i)
+  (make-string i #\space))
+
+(define (indent i)
+  (+ i 2))
+
+(define (pp/mplus i s1 s2)
+  (format "mplus~n~a~a"
+          (pp/stream (indent i) s1)
+          (pp/stream (indent i) s2)))
+
+(define (pp/bind i s g)
+  (format "bind~n~a~a"
+          (pp/stream (indent i) s)
+          (pp/goal (indent i) g)))
+
+(define (pp/disj i g1 g2)
+  (format "disj~n~a~a"
+          (pp/goal (indent i) g1)
+          (pp/goal (indent i) g2)))
+
+(define (flatten/conj c)
+  (match c
+    ((conj g1 g2)
+     (cond
+       ((and (conj? g1) (conj? g2))
+        (append (flatten/conj g1)
+                (flatten/conj g2)))
+       ((conj? g1)
+        (cons g2 (flatten/conj g1)))
+       ((conj? g2)
+        (cons g1 (flatten/conj g2)))
+       (else (list g1 g2))))
+    (c (list c))))
+
+(define (pp/conj- i g1 g2)
+  (format "conj~n~a~a"
+          (pp/goal (indent i) g1)
+          (pp/goal (indent i) g2)))
+
+(define (pp/conj i g1 g2)
+  (let ((cxs (flatten/conj (conj g1 g2))))
+    (let loop ((cxs cxs)
+               (out (format "conj~n")))
+      (if (null? cxs)
+          out
+          (loop (cdr cxs) (string-append out (pp/goal (indent i) (car cxs))))))))
+
+(define (pp/== i t1 t2)
+  (format "== ~a ~a~n"
+          (pp/term t1)
+          (pp/term t2)))
+
+(define (pp/term t)
+  (format "~a" t))
+
+(define (pp/relate i t d)
+  (format "~a~n" d))
+
+(define (pp/goal i g)
+  (match g
+    ((disj g1 g2) (format "~a~a" (spaces i) (pp/disj i g1 g2)))
+    ((conj g1 g2) (format "~a~a" (spaces i) (pp/conj i g1 g2)))
+    ((== t1 t2) (format "~a~a" (spaces i) (pp/== i t1 t2)))
+    ((relate t d) (format "~a~a" (spaces i) (pp/relate i t d)))))
+
+(define (pp/pause i st g)
+  (format "pause~n~a~a~a"
+          (spaces (indent i))
+          (pp/state (indent i) st)
+          (pp/goal (indent i) g)))
+
+(define (pp/state i st)
+  (format "~a~n" st))
+
+(define (pp/stream i s)
+  (match s
+    ((mplus s1 s2) (format "~a~a" (make-string i #\space) (pp/mplus i s1 s2)))
+    ((bind s g) (format "~a~a" (make-string i #\space) (pp/bind i s g)))
+    ((pause st g) (format "~a~a" (make-string i #\space) (pp/pause i st g)))
+    (`(,st . ,s) (format "~a~a~a" (make-string i #\space) (pp/state i st) (pp/stream i s)))
+    (s (format "~a~a~n" (make-string i #\space) s))))
+---
+
+# Simplify
+
+--- /simplify.rkt
+#lang racket/base
+
+(provide simplify)
+
+(require (only-in racket/match match)
+         first-order-miniKanren/microk-fo)
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Propagate shallow constraints and prune failures.
+(define (prune/stream s)
+  (match s
+    ((mplus s1 s2) (match (prune/stream s1)
+                     (#f (prune/stream s2))
+                     (s1 (match (prune/stream s2)
+                           (#f s1)
+                           (s2 (mplus s1 s2))))))
+    ((bind s g)    (match (prune/stream s)
+                     (#f          #f)
+                     (`(,st . #f) (prune/goal st g))
+                     ((pause st g1)
+                      (match (prune/goal st g)
+                        (#f           #f)
+                        ((pause st g) (pause st (conj g1 g)))))
+                     (s (match (prune/goal empty-state g)
+                          (#f          #f)
+                          ((pause _ _) (bind s g))))))
+    ((pause st g)  (prune/goal st g))
+    (`(,st . ,s)   `(,st . ,(prune/stream s)))
+    (s             s)))
+
+(define (prune/goal st g)
+  (define (prune/term t) (walk* t (state-sub st)))
+  (match g
+    ((disj g1 g2)
+     (match (prune/goal st g1)
+       (#f (prune/goal st g2))
+       ((pause st1 g1)
+        (match (prune/goal st g2)
+          (#f           (pause st1 g1))
+          ((pause _ g2) (pause st (disj g1 g2)))))))
+    ((conj g1 g2)
+     (match (prune/goal st g1)
+       (#f            #f)
+       ((pause st g1) (match (prune/goal st g2)
+                        (#f            #f)
+                        ((pause st g2) (pause st (conj g1 g2)))))))
+    ((relate thunk d) (pause st (relate thunk (prune/term d))))
+    ((== t1 t2)
+     (let ((t1 (prune/term t1)) (t2 (prune/term t2)))
+       (match (unify t1 t2 st)
+         (#f          #f)
+         (st          (pause st (== t1 t2))))))
+    ((=/= t1 t2)
+     (let ((t1 (prune/term t1)) (t2 (prune/term t2)))
+       (match (disunify t1 t2 st)
+         (#f          #f)
+         (st          (pause st (=/= t1 t2))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Transform into Disjunctive Normal Form.
+(define (dnf/stream s)
+  (define (push-pause st g)
+    (match g
+      ((disj g1 g2) (mplus (push-pause st g1) (push-pause st g2)))
+      (g            (pause st g))))
+  (match s
+    ((bind s g)
+     (let loop1 ((s (dnf/stream s)) (g (dnf/goal g)))
+       (define (loop2 s g)
+         (match g
+           ((disj ga gb) (mplus (loop2 s ga) (loop2 s gb)))
+           (g            (bind s g))))
+       (match s
+         ((mplus sa sb) (mplus (loop1 sa g) (loop1 sb g)))
+         (`(,st . ,s)   (mplus (push-pause st g) (loop1 s g)))
+         (s             (loop2 s g)))))
+    ((pause st g)  (push-pause st (dnf/goal g)))
+    ((mplus s1 s2) (mplus (dnf/stream s1) (dnf/stream s2)))
+    (`(,st . ,s)   `(,st . ,(dnf/stream s)))
+    (s             s)))
+
+(define (dnf/goal g)
+  (match g
+    ((conj g1 g2)
+     (let loop1 ((g1 (dnf/goal g1)) (g2 (dnf/goal g2)))
+       (define (loop2 g1 g2)
+         (match g2
+           ((disj g2a g2b) (disj (loop2 g1 g2a) (loop2 g1 g2b)))
+           (g2             (conj g1 g2))))
+       (match g1
+         ((disj g1a g1b) (disj (loop1 g1a g2) (loop1 g1b g2)))
+         (g1             (loop2 g1 g2)))))
+    ((disj g1 g2) (disj (dnf/goal g1) (dnf/goal g2)))
+    (g            g)))
+
+(define (simplify s)
+  (prune/stream (dnf/stream s)))
+---
