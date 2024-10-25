@@ -4,3 +4,5 @@ lit/docs/
 .vscode/
 .virtual_documents/
 dist/
+.aider*
+.env
