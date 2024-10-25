@@ -170,6 +170,28 @@ This change is unfortunate in one way: with the previous stepper, we could get t
 
 Such is life. Let's proceed.
 
+### Simplify
+
+Notice that we're simplifying the `mplus` streams.
+
+--- simplifying mplus streams --- noTangle
+;; ...
+    (match s
+     ((mplus s1 s2)
+      (let ((s1 (simplify s1))
+            (s2 (simplify s2)))
+        (cond
+;; ...
+---
+
+When a stream has been simplified with `(prune/stream (dnf/stream s))`...
+
+> ...we are guaranteed to find all disjunctions at the top (after any available answers), as a `mplus` tree, with leaves of the form `(pause STATE GOAL)`. [[§6.1 The miniKanren stepper](http://minikanren.org/workshop/2019/minikanren19-final2.pdf#page=14)]
+
+If we want to turn that into a *flat* list of "choices", then we need to walk that `mplus` tree and pull out the `pause`s into their own top-level list. Those are our choices.
+
+That's probably desirable. For human consumption, it's easier to think about your options when they're presented to you as a flat list rather than obscured as a tree. It's easier to think "I want to take option 4" rather than "I want to take the left branch, then the left branch of that."
+
 ## Streaming output instead of building up a result with `cons`
 
 There's one more minor change we need to make.
