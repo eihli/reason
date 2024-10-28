@@ -1,32 +1,3 @@
-;; The output format of this pretty printing is still kind of noisy.
-;; It makes it hard to find, by hand, the path you want.
-;;
-;; Example:
-;;
-;; left or right? right
-;; left:
-;; mplus
-;;   #s(state ((#s(var b 2) 3 4) (#s(var a2 7)) (#s(var res 8) 3 4) (#s(var a1 6) . 2) (#s(var a2 4) #s(var a1 6) . #s(var a2 7)) (#s(var res 5) 2 3 4) (#s(var a1 3) . 1) (#s(var a 1) #s(var a1 3) . #s(var a2 4)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
-;;   #f
-;;   mplus
-;;     pause
-;;       #s(state ((#s(var b 2) 4) (#s(var a2 10)) (#s(var res 11) 4) (#s(var a1 9) . 3) (#s(var a2 7) #s(var a1 9) . #s(var a2 10)) (#s(var res 8) 3 4) (#s(var a1 6) . 2) (#s(var a2 4) #s(var a1 6) . #s(var a2 7)) (#s(var res 5) 2 3 4) (#s(var a1 3) . 1) (#s(var a 1) #s(var a1 3) . #s(var a2 4)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
-;;       conj
-;;         == () ()
-;;         == (4) (4)
-;;     pause
-;;       #s(state ((#s(var res 14)) (#s(var a1 12) . 4) (#s(var a2 10) #s(var a1 12) . #s(var a2 13)) (#s(var res 11) 4) (#s(var a1 9) . 3) (#s(var a2 7) #s(var a1 9) . #s(var a2 10)) (#s(var res 8) 3 4) (#s(var a1 6) . 2) (#s(var a2 4) #s(var a1 6) . #s(var a2 7)) (#s(var res 5) 2 3 4) (#s(var a1 3) . 1) (#s(var a 1) #s(var a1 3) . #s(var a2 4)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
-;;       conj
-;;         (#<procedure:appendo> appendo #s(var a2 13) #s(var b 2) ())
-;;         == (4 . #s(var a2 13)) (4 . #s(var a2 13))
-;;         == (4) (4)
-;;
-;; right:
-;; pause
-;;   #s(state ((#s(var b 2) 1 2 3 4) (#s(var a 1)) (#s(var #f 0) #s(var a 1) #s(var b 2))) () () ())
-;;   conj
-;;     == () ()
-;;     == (1 2 3 4) (1 2 3 4)
 #lang racket/base
 
 (provide pp/state
@@ -82,7 +53,7 @@
 (define (pp/conj i g1 g2)
   (let ((cxs (flatten/conj (conj g1 g2))))
     (let loop ((cxs cxs)
-               (out (format "conj~n")))
+               (out (format "Constraints:~n")))
       (if (null? cxs)
           out
           (loop (cdr cxs) (string-append out (pp/goal (indent i) (car cxs))))))))
@@ -96,29 +67,51 @@
   (format "~a" t))
 
 (define (pp/relate i t d)
-  (format "~a~n" d))
+  (format "~a~n" (cdr d)))
 
 (define (pp/goal i g)
   (match g
     ((disj g1 g2) (format "~a~a" (spaces i) (pp/disj i g1 g2)))
     ((conj g1 g2) (format "~a~a" (spaces i) (pp/conj i g1 g2)))
-    ((== t1 t2) (format "~a~a" (spaces i) (pp/== i t1 t2)))
-    ((relate t d) (format "~a~a" (spaces i) (pp/relate i t d)))))
+    ((== t1 t2) "")
+    ((relate t d) (format "~a* ~a" (spaces i) (pp/relate i t d)))))
 
 (define (pp/pause i st g)
-  (format "pause~n~a~a~a"
+  (format "pause~n~aState:~n~a~a"
           (spaces (indent i))
-          (pp/state (indent i) st)
+          (pp/state (indent (indent i)) st)
           (pp/goal (indent i) g)))
 
 (define (pp/state i st)
-  (format "~a~n" st))
+  (let ((sub (state-sub st)))
+    ;; Each element in `sub` is a pair of a (struct with name and index . value)
+    ;; Print each as "(var <name> <index) == value"
+    (apply string-append
+      (map
+        (lambda (binding)
+          (format "~a* ~a == ~a~n"
+                  (spaces i)
+                  (pp/term (car binding))
+                  (pp/term (cdr binding))))
+        sub))))
+
+(define (pp/result i st)
+  (format "~aCandidate result: ~a~n" (spaces i) (reify/initial-var st)))
 
 (define (pp/stream i s)
   (match s
-    ((mplus s1 s2) (format "~a~a" (make-string i #\space) (pp/mplus i s1 s2)))
-    ((bind s g) (format "~a~a" (make-string i #\space) (pp/bind i s g)))
-    ((pause st g) (format "~a~a" (make-string i #\space) (pp/pause i st g)))
-    (`(,st . ,s) (format "~a~a~a" (make-string i #\space) (pp/state i st) (pp/stream i s)))
-    (s (format "~a~a~n" (make-string i #\space) s))))
-
+    ((mplus s1 s2) (format "~a~a" (spaces i) (pp/mplus i s1 s2)))
+    ((bind s g) (format "~a~a" (spaces i) (pp/bind i s g)))
+    ((pause st g) (format "~a~a" (spaces i) (pp/pause i st g)))
+    ;; TODO: Review the comment and clause below.
+    ;; A state isn't necessarily a result.
+    ;; But when a stream is a pair of a state and a stream, then *that* state *is* a result.
+    (`(,st . ,s) (format "~a(~n~a~a.~n~a~a)~n"
+                   (spaces i)
+                   (pp/result (indent i) st)
+                   (make-string (indent i) #\space)
+                   (pp/stream (indent i) s)
+                   (spaces i)))
+    ;; I'm hacking into pp/stream to print results. Kind of like stream->choices.
+    ((state s diseq types distypbes) (pp/result (indent i) state))
+    (s (format "~a~a~n" (spaces i) s))))

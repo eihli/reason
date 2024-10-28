@@ -5,21 +5,10 @@
 (require (only-in racket/match match)
          first-order-miniKanren/microk-fo)
 
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Propagate shallow constraints and prune failures.
-;;
-;; > Another interesting property of DNF is that if we apply the full pruning
-;; > transformation on a DNF stream, all remaining `==` constraints will be
-;; > trivial in the sense that they are guaranteed to succeed, and will not
-;; > provide new information. This is because all available equality information
-;; > will have already been gathered in a `pause` state. These trivial constraints
-;; > may be safely removed.
-;; >
-;; > - http://minikanren.org/workshop/2019/minikanren19-final2.pdf#page=14
-;;
-;; TODO: Why exacly is that? Why will "all available equality information" have
-;; "been gathered in a `pause` state"?
-;; DONE: See "note 42".
 (define (prune/stream s)
   (match s
     ((mplus s1 s2) (match (prune/stream s1)
@@ -58,12 +47,6 @@
                         (#f            #f)
                         ((pause st g2) (pause st (conj g1 g2)))))))
     ((relate thunk d) (pause st (relate thunk (prune/term d))))
-    ;; note 42
-    ;; Any time we reach an `==` constraint, we match on its unification.
-    ;; If it doesn't unify, it's pruned to `#f`.
-    ;; If it does    unify, it's replaced with a `pause`.
-    ;; Therefore, it's either trivially failure or success. We no longer need to
-    ;; check to see if it's unified. It gets unified as part of this pruning.
     ((== t1 t2)
      (let ((t1 (prune/term t1)) (t2 (prune/term t2)))
        (match (unify t1 t2 st)
