@@ -46,6 +46,61 @@ Since `step` is the function that handles re-ordering disjunctions [see here](ht
 
 `step` is going vary based on which "path chooser" we are using. If we want `step` to reach out to `stdin` for decisions, that will be one possible `step` function that we'd pass in. But if we want it to reach out to a separate process which is running a neural network to make decisions, then that would be a different `step` function.
 
+### New stuff
+
+What's it going to look like?
+
+We want a way to explore the stream.
+
+> With a pruned DNF stream, we are guaranteed to find all disjuctions at the top
+> (after any available answers), as an `mplus` tree, with leaves of the form
+> `(pause STATE GOAL)`. Each of these leaves represents a choice, and all choices
+> can be extracted while traversing the tree.
+
+--- explore/stream
+(define (explore/stream step s)
+  (loop ((s (simplify s)
+         (choices (stream->choices s))))
+    (let ((expanded (simplify (step (list-ref choices choice))))))
+      (loop
+          (list-set choices choice (simplify (step )))))
+)
+---
+
+--- step/choices
+(define (step/choices choose choices)
+  (let ((choice (choose choices)))
+    (let ((choices (list-set choices choose (simplify )))))))
+---
+
+#### Flattening our choices.
+
+If we work with a "simplified" stream, a stream that has gone through disjunctive-form normalization and pruning, then there's 4 cases that we need to handle:
+
+- `mplus`
+- an empty stream
+- a "mature" stream - a pair of a solution and a stream
+- `pause`
+
+If you want to know why those are the 4 cases we need to handle, see [the definition of `step` in microKanren](https://github.com/gregr/first-order-miniKanren/blob/master/microk-fo.rkt#L64).
+
+first-order-miniKanren/tools.rkt flattens a stream into choices like this:
+
+--- stream->choices
+(define (stream->choices s)
+  (let loop ((s (simplify s)))
+    (match s
+      ((mplus s1 s2) (append (loop s1) (loop s2)))
+      (#f            '())
+      (`(,st . ,s)   (cons st (loop s)))
+      (s             (list s)))))
+---
+
+The result of that is going to be a list of states and streams - solutions and continuations.
+
+
+### Old stuff
+
 The original miniKanren run looks like this:
 
 --- run --- noTangle
@@ -125,7 +180,13 @@ If the only thing we need to change is the `step` function, then what will our c
                (bind (cdr s) g)))
        (else (bind ((stepper choose) s) g))))
      ((pause st g) (start st g))
-     (_ s))))
+     (`(,st . ,s)
+      (let ((path (choose st s)))       ; <-- `choose` which path to take
+        (if (eq? 'left path)
+          (begin
+            (out st)
+            (simplify ((stepper choose) s)))
+          `(,st . ,(simplify ((stepper choose) s)))))))))
 ---
 
 It's kind of weird that, when you `step` `'left`, the streams get re-ordered, such that to `step` down that path again you subsequently need to `step` `'right`. If we don't want to re-order the streams, then we just need to handle the case where `s2` is mature.
@@ -146,6 +207,13 @@ Let's make it happen.
          ;; (Assuming this code is written correctly as I intended.)
          ;; By the way - a pair means we found a solution.
          ((pair? s1)
+          (let ((path (choose s1)))
+            (if (eq? 'left path)
+              (begin
+                (print (format st))
+                (cons ((simplify (cdr s1))) (simplify ((stepper choose) s))))
+              (cons (cdr s1))))
+
           (cons (car s1)
                 (mplus (cdr s1) s2)))
          ((pair? s2)                         ; <- additional check if s2 is `mature`
@@ -163,8 +231,7 @@ Let's make it happen.
         (mplus (pause (car s) g)
                (bind (cdr s) g)))
        (else (bind (simplify ((stepper choose) s)) g))))
-     ((pause st g) (start st g))
-     (_ s))))
+     ((pause st g) (start st g)))))
 ---
 
 This change is unfortunate in one way: with the previous stepper, we could get the biased interleaving behavior of typical miniKanren by simply having a chooser that always chose the `'left` path. Now, we'll need an entirely new stepper function to get that behavior.
@@ -222,7 +289,6 @@ Instead, let's include an `out` parameter that takes a mature stream and does wh
       (let ((s (mature/step step s)))
         (if (pair? s)
             (begin
-              (out (car s))
               (stream-out/step out step (and n (- n 1)) (cdr s)))
             (out '())))))
 ---
@@ -283,6 +349,8 @@ I don't know exactly what the interface is going to be for how the miniKanren pr
     (lambda ()
       (close-output-port out))))
 ---
+
+*TODO*: Instead of just blurting out "Received", we need to provide the solutions as a choice.
 
 --- background thread for handling results
 (define (out/stdout channel)
@@ -502,8 +570,6 @@ Layers are built by the disjunction of:
 (thread-wait thrd)
 ---
 
-## Flattening our choices.
-
 ## The code – neural-architecture-search.rkt
 
 --- /neural-architecture-search.rkt
@@ -668,6 +734,7 @@ Example:
     ((mplus s1 s2) (format "~a~a" (spaces i) (pp/mplus i s1 s2)))
     ((bind s g) (format "~a~a" (spaces i) (pp/bind i s g)))
     ((pause st g) (format "~a~a" (spaces i) (pp/pause i st g)))
+    ;; TODO: Review the comment and clause below.
     ;; A state isn't necessarily a result.
     ;; But when a stream is a pair of a state and a stream, then *that* state *is* a result.
     (`(,st . ,s) (format "~a(~n~a~a.~n~a~a)~n"
@@ -676,6 +743,8 @@ Example:
                    (make-string (indent i) #\space)
                    (pp/stream (indent i) s)
                    (spaces i)))
+    ;; I'm hacking into pp/stream to print results. Kind of like stream->choices.
+    ((state s diseq types distypbes) (pp/result (indent i) state))
     (s (format "~a~a~n" (spaces i) s))))
 ---
 
