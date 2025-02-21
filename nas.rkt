@@ -6,29 +6,12 @@
          layerso
          parse-nums)
 
-(require (prefix-in dispatch: web-server/dispatch)
-         (prefix-in dispatch-log: web-server/dispatchers/dispatch-log)
-         (prefix-in jsexpr: web-server/http/json)
-         (prefix-in xexpr: web-server/http/xexpr)
-         (prefix-in rqstruct: web-server/http/request-structs)
-         (prefix-in servlet: web-server/servlet-env)
+(require (prefix-in servlet: web-server/servlet-env)
          (only-in racket/match match)
          (only-in racket/list takef dropf)
-         (only-in racket/port with-output-to-string)
-         json
          first-order-miniKanren/microk-fo
          first-order-miniKanren/tools
-         "math.rkt"
-         (rename-in "mk-syntax.rkt" (run mk/run))
-         racket/serialize)
-
-(define (not-found-route request)
-  (xexpr:response/xexpr
-   `(html (body (h2 "Uh-oh! Page not found.")))))
-
-(define (home-route request)
-  (xexpr:response/xexpr
-   `(html (body (h2 "Look ma, no state!!!!!!!!!")))))
+         "math.rkt")
 
 (define-relation (appendo a b ab)
   (conde
@@ -38,6 +21,44 @@
       (== ab `(,a1 . ,res))
       (appendo a2 b res)))))
 
+(run 8 (a b) (appendo a b '(1 2 3 4)))
+; '((() (1 2 3 4)) ((1) (2 3 4)) ((1 2) (3 4)) ((1 2 3) (4)) ((1 2 3 4) ()))
+
+(drive/stdio
+ step
+ (query (a b)
+        (appendo a b '(1 2 3 4))))
+
+;; How would you "step" through this, allowing an external process to select a branch at each decision point?
+
+;; (expand '(run 8 (a b) (appendo a b '(1 2 3 4))))
+
+;; The above expands to the below. The important bit is probably the `stream-take`.
+
+;; (#%app
+;;  map
+;;  reify/initial-var
+;;  (#%app
+;;   stream-take
+;;   '8
+;;   (let-values (((goal)
+;;                 (let-values (((a)
+;;                               (#%app var/fresh 'a))
+;;                              ((b)
+;;                               (#%app var/fresh 'b)))
+;;                   (#%app
+;;                    conj2
+;;                    (#%app
+;;                     ==4
+;;                     (#%app list a b)
+;;                     initial-var)
+;;                    (#%app
+;;                     appendo
+;;                     a
+;;                     b
+;;                     '(1 2 3 4))))))
+;;     (#%app pause14 empty-state goal))))>
+
 (define (stream->choices s)
   (let loop ((s (prune/stream (dnf/stream s))))
     (match s
@@ -45,19 +66,6 @@
       (#f            '())
       (`(,st . ,s)   (cons st (loop s)))
       (s             (list s)))))
-
-(define (initialize request)
-  (let ((choices
-         (stream->choices
-          (prune/stream
-           (dnf/stream
-            (pause
-             empty-state
-             (fresh (a b)
-                    (== `(,a ,b) initial-var)
-                    (appendo a b `(1 2 3 4)))))))))
-    (jsexpr:response/jsexpr (hash 'choices (with-output-to-string (lambda ()
-                                                                    (write (serialize (serialize-choices choices)))))))))
 
 
 (define (serialize-choices choices)
@@ -122,18 +130,6 @@
     ((relate thnk desc) (format "(relate ~a)" (cdr desc)))
     ((== t1 t2) (format "(== ~a ~a)" (serialize-term t1) (serialize-term t2)))))
 
-(define (start-server req)
-  (let ((choices (serialize-choices
-                  (stream->choices
-                   (parallel-step
-                    (pause
-                     empty-state
-                     (fresh (a b)
-                            (== `(,a ,b) initial-var)
-                            (appendo a b '(1 2 3 4)))))))))
-    (jsexpr:response/jsexpr
-     (hash 'choices choices))))
-
 ;; (let ((choices (serialize-choices
 ;;                   (stream->choices
 ;;                    (parallel-step
@@ -196,59 +192,6 @@
       (cons (parse-nums (car layers)) (parse-nums (cdr layers))))
      (else layers))))
 
-(define linearo
-  (lambda (q in out)
-    (== q `(Linear ,in ,out))))
-
-(define percento
-  (lambda (x)
-    (fresh (y)
-      (pluso x y (build-num 99)))))
-
-(define dropouto
-  (lambda (q in out)
-    (fresh (p)
-      (percento p)
-      (== in out)
-      (== q `(Dropout ,in ,out ,p)))))
-
-(define reluo
-  (lambda (q in out)
-    (conde
-     ((== in out)
-      (== q `(Relu ,in ,out))))))
-
-
-(define conso
-  (lambda (head tail result)
-    (== result `(,head . ,tail))))
-
-(define-relation (<lo n m)
-  (conde
-    ((== '() n) (poso m))
-    ((== '(1) n) (>1o m))
-    ((fresh (a x b y)
-       (== `(,a . ,x) n) (poso x)
-       (== `(,b . ,y) m) (poso y)
-       (<lo x y)))))
-
-(define-relation (=lo n m)
-  (conde
-    ((== '() n) (== '() m))
-    ((== '(1) n) (== '(1) m))
-    ((fresh (a x b y)
-       (== `(,a . ,x) n) (poso x)
-       (== `(,b . ,y) m) (poso y)
-       (=lo x y)))))
-
-(define-relation (<o n m)
-  (conde
-    ((<lo n m))
-    ((=lo n m)
-     (fresh (x)
-       (poso x)
-       (pluso n x m)))))
-
 (define-relation (layero layer in out)
   (conde
    ((== layer `(Linear ,in ,out)))
@@ -259,7 +202,9 @@
       (== in out)
       (countero percent)
       (<o '(1) percent)
-      (<o percent '(0 0 1 0 0 1 1))))))
+      (<o percent '(0 0 1 0 0 1 1))))
+   ;; TODO: Add more layers.
+   ))
 
 (define-relation (tailo lst tail)
   (fresh (a d rst)
@@ -287,9 +232,7 @@
    ((== q `(1)))
    ((tailo q 1))))
 
-(define-relation (>1o n)
-  (fresh (a ad dd)
-    (== `(,a ,ad . ,dd) n)))
+; (map (lambda (xs) (map unbuild-num xs)) (run 20 (q) (countero q)))
 
 (define-relation (layerso layers in out)
   (conde
@@ -301,8 +244,6 @@
            (layero layer-1 in hidden)
            (layerso layer-2 hidden out)
            (== layers `(,layer-1 . ,layer-2))))))
-
-(define (identity x) x)
 
 ;; `query` binds given vars to `initial-var` and wraps goal in `(pause empty-state ...)`
 ;; (define ow-stream (query (q) (layerso q '(0 0 0 1) '(0 0 1))))
@@ -363,32 +304,6 @@
         ((conj g1 g2)     (conj (loop g1) (loop g2)))
         ((relate thunk _) (thunk))
         (_                g))))
-
-(define (ow-parallel-step s)
-  (ow-parallel-step-simple s))
-
-(define (serialize-results r)
-  (format "RESULTS: ~a" (map reify/initial-var r)))
-
-;; At each step
-;;   Log the choice. The choice includes the state, so it has everything you need to make your decision.
-;;     In other words, you don't need a history of choices.
-;;
-;;   If there's results, log the results.
-;;
-;; Training data will be the list of choice+ result
-(define (ow-step s)
-  (with-output-to-file "/tmp/out"
-    (lambda ()
-      (let ((s (stream->choices (parallel-step s))))
-        (let ((cxs (choices s))
-              (rts (results s)))
-          (newline)
-          (when (not (null? cxs)) (println (serialize-choices cxs)))
-          (when (not (null? rts)) (println (serialize-results rts)))
-          (newline)))
-          (step s))
-    #:exists 'append))
 
 (define (choices stream)
   (dropf stream state?))
@@ -1124,12 +1039,12 @@
     ((pause st g) (mustart st g))
     (_ s)))
 
-(let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
-  (let ((simple-stepper (lambda (s) (simplify (mustep s)))))
-    (list
-     s
-     (simple-stepper s)
-     (simple-stepper (simple-stepper s)))))
+;; (let ((s (simplify (query (a b) (appendo a b '(1 2 3 4))))))
+;;   (let ((simple-stepper (lambda (s) (simplify (mustep s)))))
+;;     (list
+;;      s
+;;      (simple-stepper s)
+;;      (simple-stepper (simple-stepper s)))))
 
 (define (pullup-mature-streams s)
   (match s
@@ -1354,8 +1269,8 @@
 
 ;; (map reify/initial-var (orun))
 
-(let ((q (query (a b) (appendo a b '(1 2 3 4)))))
-  (q))
+;; (let ((q (query (a b) (appendo a b '(1 2 3 4)))))
+;;   (q))
 
 ;; What does this equal?
 (append '(1 2) '(3 4))
@@ -1367,8 +1282,32 @@
 ;; (append     a       b) == '(1 2 3 4)
 
 
-(run* (q)   (appendo '(1 2) '(3 4) q))
+;; (run* (q)   (appendo '(1 2) '(3 4) q))
 
-(run* (a)   (appendo      a '(3 4) '(1 2 3 4)))
+;; (run* (a)   (appendo      a '(3 4) '(1 2 3 4)))
 
-(run* (a b) (appendo      a      b '(1 2 3 4)))
+;; (run* (a b) (appendo      a      b '(1 2 3 4)))
+
+;; Valid MNIST architectures.
+(parse-nums (run 20 (q) (layerso q (build-num 768) (build-num 10))))
+
+;; '((((Linear 768 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 3) (Linear 3 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 1) (Relu 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 7) (Linear 7 10) (OUT 10)))
+;;   (((Linear 768 3) (Linear 3 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 1) (Linear 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 2) (Linear 2 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 3) (Linear 3 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 1) (Relu 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 3) (Linear 3 3) (Linear 3 10) (OUT 10)))
+;;   (((Linear 768 1) (Relu 1 1) (Linear 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 7) (Linear 7 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 3) (Linear 3 1) (Linear 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 3) (Relu 3 3) (Linear 3 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 1) (Linear 1 1) (Linear 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 1) (Relu 1 1) (Relu 1 1) (Linear 1 10) (OUT 10)))
+;;   (((Linear 768 1) (Linear 1 1) (Linear 1 3) (Linear 3 10) (OUT 10)))
+;;   (((Linear 768 3) (Linear 3 1) (Relu 1 1) (Linear 1 10) (OUT 10))))

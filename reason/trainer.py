@@ -1,5 +1,8 @@
+import random
 import struct
 
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,7 +11,7 @@ import zmq
 from torch.utils.data.dataloader import DataLoader
 from torchvision import datasets
 
-from compiler import parse_architectures, sample_architectures, tokenize
+from reason.compiler import parse_architectures, sample_architectures, tokenize
 
 mnist = datasets.MNIST(
     "~/.data",
@@ -32,7 +35,7 @@ def train(model):
         with torch.no_grad():
             for param in model.parameters():
                 param -= 0.001 * param.grad
-    return losses
+    return torch.tensor(losses)
 
 
 def run(architectures):
@@ -41,10 +44,9 @@ def run(architectures):
         model = nn.Sequential(nn.Flatten(), *arch)
         result = train(model)
         results.append(result)
+    return results
 
 
-architectures = parse_architectures(tokenize(sample_architectures), 0)
-model = nn.Sequential(nn.Flatten(), *architectures[0])
 
 class DQN(nn.Module):
     def __init__(self):
@@ -75,4 +77,34 @@ def run_server():
         socket.send(struct.pack("!i", choice))
 
 
-run_server()
+def plot_losses(ys, figsize=(12, 6), window_size=10):
+    ys = torch.conv1d(
+        ys.unsqueeze(0).unsqueeze(0),
+        torch.ones(1, 1, 1, window_size) / window_size
+    ).squeeze(0).squeeze(0)
+    ys = ys.numpy()
+
+    # Create a figure with two subplots side by side
+    fig, ax1 = plt.subplots(1, 1, figsize=figsize)
+
+    # Left subplot: Line plot with smoothing
+    xs = np.arange(ys.shape[1])
+    for i in range(len(ys)):
+        ax1.plot(xs, ys[i],
+                label=f'Run {i+1}',
+                color=f'C{i}')
+
+    ax1.set_xlabel('Iteration')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training Loss Curves')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    plt.tight_layout()
+    return fig
+
+if __name__ == "__main__":
+    architectures = parse_architectures(tokenize(sample_architectures), 0)
+    results = run(architectures)
+    model = nn.Sequential(nn.Flatten(), *architectures[0])
+    run_server()
