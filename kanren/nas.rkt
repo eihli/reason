@@ -226,6 +226,8 @@
    ((== q `(1)))
    ((tailo q 1))))
 
+(run 5 (q) (countero q))
+
 (define-relation (dimso q)
   (<lo '() q)
   (conde

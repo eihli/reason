@@ -11,7 +11,7 @@ import zmq
 from torch.utils.data.dataloader import DataLoader
 from torchvision import datasets
 
-from reason.compiler import parse_architectures, sample_architectures, tokenize
+from neural.compiler import parse_architectures, sample_architectures, tokenize
 
 mnist = datasets.MNIST(
     "~/.data",
@@ -75,6 +75,15 @@ def run_server():
             print(f"Received {choice} but expected an integer.")
             continue
         socket.send(struct.pack("!i", choice))
+        message = socket.recv()
+        socket.send_string("0")
+        print(message)
+        message = socket.recv()
+        socket.send_string("1")
+        message = socket.recv()
+        socket.send_string("1")
+        message = socket.recv()
+        socket.send_string("1")
 
 
 def plot_losses(ys, figsize=(12, 6), window_size=10):
