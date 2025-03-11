@@ -14,46 +14,6 @@
   first-order-miniKanren/tools
   first-order-miniKanren/math)
 
-;; Serialize choices.
-;; choices might be "choices" or they might be "results".
-;; Choices that are true of the `state?` predicate are "results".
-;; Otherwise, they are "choices".
-;; This serializes both.
-;;
-;; Here's an example of serialzing for a stdin-/stdout-driven policy.
-;;
-;; (define (pp/explore-tree exp-loc qvars)
-;;   (define tree (explore-loc-tree exp-loc))
-;;   #| (printf "Tree: ~s\n" tree) |#
-;;   #| (printf "Context: ~s\n" (explore-loc-context exp-loc)) |#
-;;   (pprint-choices (explore-node-choices tree) qvars))
-;;
-;; Where `pprint-choices` is defined as:
-;; (define (pprint-choices choices qvars)
-;;   (define chs (dropf choices state?))
-;;   (define results (takef choices state?))
-;;   (when (and (= 0 (length chs)) (null? results))
-;;     (printf "No more choices available. Undo to continue.\n"))
-;;   (unless (null? chs)
-;;     (printf "Number of Choices: ~a\n" (length chs))
-;;     (for-each (lambda (i s)
-;;                 (printf (string-append "\nChoice ~s:\n") (+ i 1))
-;;                 (pprint-choice s qvars))
-;;               (range (length chs)) chs))
-;;   (unless (null? results)
-;;     (printf "Number of results: ~a\n" (length results))
-;;     (for-each (lambda (st)
-;;                 (pprint-result st qvars)
-;;                 (newline))
-;;               results)))
-;;
-;; The difference between that serialization and this serialization
-;; is that this one will be sent to a Python process for machine
-;; learning. Rather than human-readable, we'll want to maintain
-;; as much of the tree/graph-like structure as possible, to
-;; feed through something like a graph neural network.
-
-
 ;; Serialize choices for Python to analyze
 (define (serialize choices qvars)
   (define (serialize-state st)
@@ -222,7 +182,8 @@
 
 (let ((s (init-explore (query (p) (eval-expo p '() p)))))
   (let loop ((s (explore-choice s step 0)))
-    ))
+    3))
+
 (drive/stdio step (query (p) (eval-expo p '() p)))
 
 ;; (let ((s (init-explore (query (p) (eval-expo p '() '())))))
@@ -372,4 +333,3 @@
 (let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
   (list s (explore-choice s step 0)))
 
-(split-at '(1 2 3 4 5) 2)
