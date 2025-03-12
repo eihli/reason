@@ -5,43 +5,16 @@
   racket/set
   racket/string
   racket/random
+  racket/pretty
   racket/format
   racket/async-channel
   (prefix-in rm: racket/match)
   racket/serialize
+  json
   zeromq
   first-order-miniKanren/microk-fo
   first-order-miniKanren/tools
   first-order-miniKanren/math)
-
-;; Serialize choices for Python to analyze
-(define (serialize choices qvars)
-  (define (serialize-state st)
-    (let* ([walked-vars (walked-term initial-var st)]
-           [constraints (if (state? st)
-                          '()
-                          (walked-term
-                           (goal->constraints st
-                            (pause-pause-goal (cadr (filter pause? choices))))))])
-      `(state
-        (vars ,@(if qvars
-                    (map cons qvars walked-vars)
-                    walked-vars))
-        (constraints ,@constraints))))
-
-  (define (serialize-choice choice)
-    (rm:match choice
-      [(pause st g)
-       `(choice
-         ,(serialize-state st)
-         (goal ,(pretty/goal st g)))]
-      [_ (serialize-state choice)]))
-
-  (let ([results (takef choices state?)]
-        [chs (dropf choices state?)])
-    `(search-state
-      (results ,@(map serialize-choice results))
-      (choices ,@(map serialize-choice chs)))))
 
 (define-relation (conso head tail result)
    (== `(,head . ,tail) result))
@@ -54,15 +27,71 @@
            (conso a bc abc)
            (appendo b c bc)))))
 
-(let ((q (query (a b) (appendo a b '(1 2 3 4)))))
-  (list q (stream->choices (step q))))
+(define (serialize choices qvars)
+  (define (serialize-state st)
+    (let* ([walked-vars (walked-term initial-var st)])
+      `(state
+        (vars ,@(map cons qvars walked-vars)))))
+  (define (serialize-choice choice)
+    (rm:match choice
+      [(pause st g)
+       `(choice
+         ,(serialize-state st)
+         (goal ,(pretty/goal st g)))]
+      [_ (serialize-state choice)]))
+  (let ([results (takef choices state?)]
+        [chs (dropf choices state?)])
+    `(search-state
+      (results ,@(map serialize-choice results))
+      (choices ,@(map serialize-choice chs)))))
 
-;; (drive/stdio step (query (a b) (appendo a b '(1 2 3 4))))
+
+(define (serialize-to-json choices qvars)
+  (define (serialize-state st)
+    (let* ([walked-vars (walked-term initial-var st)])
+      (map cons qvars walked-vars)))
+  (define (serialize-choice choice)
+    (rm:match choice
+      [(pause st g)
+       (hash 'state (serialize-state st)
+             'goal (pretty/goal st g))]
+      [_ (serialize-state choice)]))
+  (define results (takef choices state?))
+  (define chs (dropf choices state?))
+  (hash 'results (map serialize-choice results)
+        'choices (map serialize-choice chs)))
+
+
+(let* ((q "(query (a b) (appendo a b '(1 2 3 4)))")
+       (q (read (open-input-string q)))
+       (qvars (cadr q))
+       (s (init-explore (eval q (current-namespace)))))
+  (let* ((s (explore-choice s step 0))
+         (s (explore-choice s step 1))
+         (s (explore-choice s step 0)))
+    (serialize-to-json (explore-node-choices (explore-loc-tree s)) qvars)))
+
+(let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
+  (let* ((s (explore-choice s step 0))
+         (s (explore-choice s step 1))
+         (s (explore-choice s step 0)))
+    (serialize-to-json (explore-node-choices (explore-loc-tree s)) '(a b))))
+
+(let ((s (init-explore
+          (query (p)
+                 (fresh (body)
+                        (== p `(lambda ,body))
+                        (eval-expo `(app ,p ,(make-num 3)) '() (make-num 9))
+                        (eval-expo `(app ,p ,(make-num 4)) '() (make-num 16)))))))
+  (let* ((s (explore-choice s step 0))
+         (s (explore-choice s step 0))
+         (s (explore-choice s step 0)))
+    (serialize-to-json (explore-node-choices (explore-loc-tree s)) '(p))))
 
 ;; Socket setup and choice getter
 (define (make-connection)
   (define socket (zmq-socket 'pair))
-  (zmq-connect socket "tcp://127.0.0.5:5555")
+  (zmq-connect socket "tcp://127.0.0.1:5555")
   socket)
 
 (define connection-socket (make-connection))
@@ -75,93 +104,7 @@
   (define response-bytes (zmq-recv connection-socket))
   (define response-str (bytes->string/utf-8 response-bytes))
   (define choice-index (string->number response-str))
-
   choice-index)
-
-(let ((q (query (a b) (appendo a b '(1 2 3 4)))))
-  q)
-
-
-
-(define (serialize-qvars qvars vs)
-  (define (qv-prefix qv) (string-append " " (symbol->string qv) " = "))
-  (define qv-prefixes (and qvars (map qv-prefix qvars)))
-  (if qv-prefixes
-      (string-join
-       (map (lambda (prefix v) (~a prefix v))
-            qv-prefixes vs)
-       "\n")
-      (string-join
-       (map (lambda (v) (~a " " v)) vs)
-       "\n")))
-
-(define (serialize-choice s qvars)
-  (rm:match s
-    [(pause st g)
-     (define qvars-output (serialize-qvars qvars (walked-term initial-var st)))
-     (define cxs (walked-term (goal->constraints st g) st))
-     (define constraints-output
-       (cond
-         [(null? cxs) "No constraints\n"]
-         [else
-          (string-append
-           "Constraints:\n"
-           (string-join
-            (map (lambda (v) (~a " * " v)) cxs)
-            "\n"))]))
-     (string-append qvars-output "\n" constraints-output)]))
-
-(define (serialize-result st qvars)
-  (string-append
-   "Result:\n"
-   (serialize-qvars qvars (walked-term initial-var st))))
-
-(define (serialize-choices choices qvars)
-  (define chs (dropf choices state?))
-  (define results (takef choices state?))
-
-  (define header
-    (cond
-      [(and (= 0 (length chs)) (null? results))
-       "No more choices available. Undo to continue.\n"]
-      [(null? chs) ""]
-      [else
-       (format "Number of Choices: ~a\n" (length chs))]))
-
-  (define choices-output
-    (if (null? chs)
-        ""
-        (string-join
-         (map (lambda (i s)
-                (string-append
-                 (format "\nChoice ~s:\n" (+ i 1))
-                 (serialize-choice s qvars)))
-              (range (length chs)) chs)
-         "")))
-
-  (define results-output
-    (if (null? results)
-        ""
-        (string-append
-         (format "Number of results: ~a\n" (length results))
-         (string-join
-          (map (lambda (st)
-                 (string-append
-                  (serialize-result st qvars)
-                  "\n"))
-               results)
-          ""))))
-
-  (string-append header choices-output results-output))
-
-(let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
-  (let ((s (explore-choice s step 0)))
-    (display (serialize-choices (explore-node-choices (explore-loc-tree s)) '(a b)))))
-
-
-(let ((s (init-explore (query (p) (eval-expo p '() p)))))
-  (let ((s (explore-choice s step 0)))
-    (display (serialize-choices (explore-node-choices (explore-loc-tree s)) '(p)))))
 
 
 ;; (let ((c (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
@@ -179,12 +122,6 @@
 ;;            [(or (eq? input 'u) (eq? input 'undo)) (explore-undo s)]
 ;;            [else s])))
 ;;       (takef (explore-node-choices (explore-loc-tree s)) state?))))
-
-(let ((s (init-explore (query (p) (eval-expo p '() p)))))
-  (let loop ((s (explore-choice s step 0)))
-    3))
-
-(drive/stdio step (query (p) (eval-expo p '() p)))
 
 ;; (let ((s (init-explore (query (p) (eval-expo p '() '())))))
 ;;   (let loop ((s (explore-choice s step 0)))
