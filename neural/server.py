@@ -258,7 +258,7 @@ def run_guided_search(model, tokenizer, env, num_episodes=100, max_steps=200, lr
             avg_reward = np.mean(metrics['rewards'][-10:])
             print(f'Episode {episode+1}/{num_episodes} | Success: {avg_success:.2f}'
                   f' | Steps: {avg_steps:.2f} | Reward: {avg_reward:.2f} | ε: {ε:.3f}')
-        return model, metrics
+    return model, metrics
 
 class ConstraintLogicEnvironment:
     def __init__(self, addr, port):
@@ -281,7 +281,7 @@ class ConstraintLogicEnvironment:
         data = {'query': "(query (a b) (appendo a b '(1 2 3 4)))"}
         logger.debug(f'Sending `{data}` to {self.addr}:{self.port}')
         self.sock.send_json(data)
-        initial_state = self.sock.recv()
+        initial_state = self.sock.recv_json()
         logger.debug(f'Received {initial_state} from {self.addr}:{self.port}')
         self.steps_taken = 0
         return initial_state
@@ -302,3 +302,21 @@ class ConstraintLogicEnvironment:
         elif not next_state['choices']:
             done = True
         return next_state, result, done
+
+def main():
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    n_vocab = tokenizer.n_vocab
+    n_embed = 128
+    n_hidden = 256
+    model = ConstraintScoringNetwork(n_vocab, n_embed, n_hidden)
+    env = ConstraintLogicEnvironment("127.0.0.1", 5555)
+    trained_model, metrics = run_guided_search(model, tokenizer, env)
+    torch.save(trained_model.state_dict(), "constraint_scorer.pt")
+    return trained_model, metrics
+
+def test():
+    env = ConstraintLogicEnvironment("127.0.0.1", 5555)
+    env.reset()
+    env.step(1)
+if __name__ == "__main__":
+    main()

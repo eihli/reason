@@ -3,6 +3,7 @@
 (require
   racket/list
   racket/set
+  racket/serialize
   racket/string
   racket/random
   racket/pretty
@@ -27,85 +28,142 @@
            (conso a bc abc)
            (appendo b c bc)))))
 
-(define (serialize choices qvars)
-  (define (serialize-state st)
-    (let* ([walked-vars (walked-term initial-var st)])
-      `(state
-        (vars ,@(map cons qvars walked-vars)))))
-  (define (serialize-choice choice)
-    (rm:match choice
-      [(pause st g)
-       `(choice
-         ,(serialize-state st)
-         (goal ,(pretty/goal st g)))]
-      [_ (serialize-state choice)]))
-  (let ([results (takef choices state?)]
-        [chs (dropf choices state?)])
-    `(search-state
-      (results ,@(map serialize-choice results))
-      (choices ,@(map serialize-choice chs)))))
+;; (define (serialize choices qvars)
+;;   (define (serialize-state st)
+;;     (let* ([walked-vars (walked-term initial-var st)])
+;;       `(state
+;;         (vars ,@(map cons qvars walked-vars)))))
+;;   (define (serialize-choice choice)
+;;     (rm:match choice
+;;       [(pause st g)
+;;        `(choice
+;;          ,(serialize-state st)
+;;          (goal ,(pretty/goal st g)))]
+;;       [_ (serialize-state choice)]))
+;;   (let ([results (takef choices state?)]
+;;         [chs (dropf choices state?)])
+;;     `(search-state
+;;       (results ,@(map serialize-choice results))
+;;       (choices ,@(map serialize-choice chs)))))
 
 
-(define (serialize-to-json choices qvars)
+(define (list->hash hsh lst)
+  (cond
+    ((null? lst) hsh)
+    (else (list->hash (hash-set hsh (caar lst) (cdar lst)) (cdr lst)))))
+
+; (list->hash (hash) '((a 1) (b 2 3 4) (c 5 6)))
+
+(define (car-t xs)
+  (if (null? xs) '() (car xs)))
+
+(define (serialize-to-json s qvars)
   (define (serialize-state st)
     (let* ([walked-vars (walked-term initial-var st)])
       (map cons qvars walked-vars)))
+  (define (serialize-result results)
+    (serialize-state results))
   (define (serialize-choice choice)
     (rm:match choice
-      [(pause st g)
-       (hash 'state (serialize-state st)
-             'goal (pretty/goal st g))]
-      [_ (serialize-state choice)]))
-  (define results (takef choices state?))
-  (define chs (dropf choices state?))
-  (hash 'results (map serialize-choice results)
-        'choices (map serialize-choice chs)))
+              [(pause st g)
+               `((state ,(serialize-state st))
+                 (goal ,(pretty/goal st g)))]
+              [_ (serialize-state choice)]))
+  (let ((choices (explore-node-choices (explore-loc-tree s))))
+    (define results (takef choices state?))
+    (define chs (dropf choices state?))
+    (jsexpr->string (hash 'results (list->hash (hash) (car-t (map serialize-result results)))
+                          'choices (map (compose ~a serialize-choice) chs)))))
 
+;; A helper function to evaluate user-supplied input containing macros:
+(define (eval-with-query str)
+  (define ns (make-base-namespace))
+  ;; Bring the macro & anything else needed into that namespace.
+  (parameterize ([current-namespace ns])
+    (namespace-require 'racket)
+    (namespace-require 'first-order-miniKanren/math)
+    (namespace-require 'first-order-miniKanren/microk-fo)
+    (namespace-require 'first-order-miniKanren/tools)
+    ;; Now 'query' is available at compile-time (phase 1) within 'ns'.
+    ;; Parse the user input from a string:
+    (define user-expr (read (open-input-string str)))
+    (eval user-expr)))
 
 (let* ((q "(query (a b) (appendo a b '(1 2 3 4)))")
-       (q (read (open-input-string q)))
-       (qvars (cadr q))
-       (s (init-explore (eval q (current-namespace)))))
+       (qvars (cadr (read (open-input-string q))))
+       (q (eval-with-query q))
+       (s (init-explore (eval (expand q) (current-namespace)))))
   (let* ((s (explore-choice s step 0))
          (s (explore-choice s step 1))
-         (s (explore-choice s step 0)))
-    (serialize-to-json (explore-node-choices (explore-loc-tree s)) qvars)))
+         (s (explore-choice s step 1)))
+    (serialize-to-json s qvars)))
 
-(let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
-  (let* ((s (explore-choice s step 0))
-         (s (explore-choice s step 1))
-         (s (explore-choice s step 0)))
-    (serialize-to-json (explore-node-choices (explore-loc-tree s)) '(a b))))
+;; (let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
+;;   (let* ((s (explore-choice s step 0))
+;;          (s (explore-choice s step 1))
+;;          (s (explore-choice s step 0)))
+;;     (serialize-to-json (explore-node-choices (explore-loc-tree s)) '(a b))))
 
-(let ((s (init-explore
-          (query (p)
-                 (fresh (body)
-                        (== p `(lambda ,body))
-                        (eval-expo `(app ,p ,(make-num 3)) '() (make-num 9))
-                        (eval-expo `(app ,p ,(make-num 4)) '() (make-num 16)))))))
-  (let* ((s (explore-choice s step 0))
-         (s (explore-choice s step 0))
-         (s (explore-choice s step 0)))
-    (serialize-to-json (explore-node-choices (explore-loc-tree s)) '(p))))
+;; (let ((s (init-explore
+;;           (query (p)
+;;                  (fresh (body)
+;;                         (== p `(lambda ,body))
+;;                         (eval-expo `(app ,p ,(make-num 3)) '() (make-num 9))
+;;                         (eval-expo `(app ,p ,(make-num 4)) '() (make-num 16)))))))
+;;   (let* ((s (explore-choice s step 0))
+;;          (s (explore-choice s step 0))
+;;          (s (explore-choice s step 0)))
+;;     (serialize-to-json (explore-node-choices (explore-loc-tree s)) '(p))))
 
-;; Socket setup and choice getter
-(define (make-connection)
-  (define socket (zmq-socket 'pair))
-  (zmq-connect socket "tcp://127.0.0.1:5555")
-  socket)
+(define shutdown-channel (make-channel))
 
-(define connection-socket (make-connection))
+(define (responder-thread)
+  (thread
+   (lambda ()
+     (let ([responder (zmq-socket 'rep)])
+       (zmq-set-option responder 'rcvtimeo 100)
+       (zmq-bind responder "tcp://127.0.0.1:5555")
+       (printf "Server started on tcp://127.0.0.1:5555~n")
+       (let loop ((s '()) (qvars '()))
+         (define should-shutdown?
+           (sync/timeout 0 shutdown-channel))
+         (if should-shutdown?
+             (begin
+               (printf "Shutting down server...~n")
+               (zmq-close responder)
+               (printf "Socket closed~n"))
+             (begin
+               ;; Try to receive a message with timeout
+               (with-handlers ([exn:fail? (lambda (e)
+                                            ;; Handle timeout or other errors
+                                            (void))])
+                 (let ([msg (string->jsexpr (zmq-recv-string responder))])
+                   (when msg
+                     (printf "Server received: ~s~n" msg)
+                     (cond
+                       ((hash-has-key? msg 'query)
+                        (printf "Received a reset.")
+                        (let* ((q (hash-ref msg 'query))
+                               (qvars (cadr (read (open-input-string q))))
+                               (q (eval-with-query q))
+                               (s (init-explore (eval (expand q) (current-namespace)))))
+                          (zmq-send responder (serialize-to-json s qvars))
+                          (loop s qvars)))
+                       ((hash-has-key? msg 'choice)
+                        (printf "Received a choice.")
+                        (let* ((choice (hash-ref msg 'choice))
+                               (s (explore-choice s step choice)))
+                          (zmq-send responder (serialize-to-json s qvars))
+                          (loop s qvars))))))))))))))
 
-(define (get-python-choice choices qvars)
-  (zmq-send connection-socket
-        (string->bytes/utf-8
-         (format "~s" (serialize choices qvars))))
+;; Function to cleanly shut down the server
+(define (stop-server)
+  (printf "Stopping server...~n")
+  (channel-put shutdown-channel 'shutdown)
+  (thread-wait responder-thread)
+  (printf "Server stopped~n"))
 
-  (define response-bytes (zmq-recv connection-socket))
-  (define response-str (bytes->string/utf-8 response-bytes))
-  (define choice-index (string->number response-str))
-  choice-index)
-
+; (stop-server)
 
 ;; (let ((c (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
 ;;   (let loop ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
@@ -157,7 +215,6 @@
 ;;            [else s])))
 ;;       (takef (explore-node-choices (explore-loc-tree s)) state?))))
 
-(zmq-close connection-socket)
 
 ;; Example usage:
 #|
@@ -267,6 +324,5 @@
       (async-channel-put *input-channel* index)
       (error "Queue backend not active")))
 
-(let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
-  (list s (explore-choice s step 0)))
-
+;; (let ((s (init-explore (query (a b) (appendo a b '(1 2 3 4))))))
+;;   (list s (explore-choice s step 0)))
