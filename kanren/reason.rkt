@@ -118,7 +118,7 @@
                      (printf "Server received: ~s~n" msg)
                      (cond
                        ((hash-has-key? msg 'query)
-                        (printf "Received a reset.")
+                        (printf "Received a reset.~n")
                         (let* ((q (hash-ref msg 'query))
                                (qvars (cadr (read (open-input-string q))))
                                (q (eval-with-query q))
@@ -126,16 +126,19 @@
                           (zmq-send responder (serialize-to-json s qvars))
                           (loop s qvars)))
                        ((hash-has-key? msg 'choice)
-                        (printf "Received a choice.")
+                        (printf "Received a choice: ~a~n" (hash-ref msg 'choice))
                         (let* ((choice (hash-ref msg 'choice))
                                (s (explore-choice s step choice)))
                           ;; Handle exceptions in this, since it's in a thread,
                           ;; they get swallowed otherwise.
                           (with-handlers ([exn:fail? (lambda (e)
-                                                      (printf "Error: ~s~n" e)
-                                                      (void))])
+                                                      (printf "Error processing choice: ~s~n" e)
+                                                      (zmq-send responder (jsexpr->string (hash 'error (format "~a" e))))
+                                                      (loop s qvars))])
                             (zmq-send responder (serialize-to-json s qvars))
                             (loop s qvars)))))))))))))))
+
+(define server-thread (responder-thread))
 
 ;; Function to cleanly shut down the server
 (define (stop-server)

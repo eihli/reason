@@ -124,9 +124,16 @@ class ConstraintScoringNetwork(nn.Module):
         self.gru = nn.GRU(n_embed, n_hidden, batch_first=True)
         self.fc = nn.Linear(n_hidden, 1)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, lengths=None):
         embedded = self.embedding(x)
-        _, hidden = self.gru(embedded)
+        if lengths is not None:
+            # Pack padded sequence for more efficient processing
+            packed = nn.utils.rnn.pack_padded_sequence(
+                embedded, lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            _, hidden = self.gru(packed)
+        else:
+            _, hidden = self.gru(embedded)
         score = self.fc(hidden.squeeze(0))
         return score
 
@@ -161,6 +168,9 @@ def preprocess_constraints(tokenizer: tiktoken.Encoding, choices: list[str]) -> 
     return torch.tensor(padded), torch.tensor(lengths)
 
 def select_action(model: nn.Module, tokenizer: tiktoken.Encoding, choices: list[str], ε=0.1) -> int:
+    if not choices:
+        return -1  # No choices available
+        
     tokens, lengths = preprocess_constraints(tokenizer, choices)
 
     if random.random() < ε:
@@ -169,8 +179,8 @@ def select_action(model: nn.Module, tokenizer: tiktoken.Encoding, choices: list[
     with torch.no_grad():
         scores = model(tokens, lengths)
 
-    probs = F.softmax(scores.squeeze(), dim=0)
-    action = torch.multinomial(probs, num_samples=1).to(torch.int).item()
+    probs = F.softmax(scores, dim=0)
+    action = torch.multinomial(probs.squeeze(1), num_samples=1).to(torch.int).item()
     return int(action)
 
 def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10):
@@ -183,14 +193,14 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10):
     for _ in range(epochs):
         batch = exp_buf.sample(bs)
         states, actions, rewards, next_states, dones = zip(*batch)
-        batch_loss = torch.tensor(0)
+        batch_loss = torch.tensor(0, dtype=torch.float)
         for i in range(len(states)):
             choices = states[i]
             action = actions[i]
             reward = rewards[i]
             tokens, lengths = preprocess_constraints(tokenizer, choices)
             scores = model(tokens, lengths)
-            probs = F.softmax(scores.squeeze(), dim=0)
+            probs = F.softmax(scores, dim=0).squeeze(1)
             action_prob = probs[action]
             log_prob = torch.log(action_prob + 1e-10)
             loss = -log_prob * reward
@@ -202,8 +212,8 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10):
         total_loss += batch_loss.item()
     return total_loss / epochs
 
-def calc_reward(state, steps_taken, max_steps=200):
-    if "result" in state[0]:
+def calc_reward(result, steps_taken, max_steps=200):
+    if result:
         efficiency_modifier = (max_steps - steps_taken) / max_steps
         base_reward = 10.0
         return base_reward / efficiency_modifier
@@ -225,30 +235,33 @@ def run_guided_search(model, tokenizer, env, num_episodes=100, max_steps=200, lr
 
     ε_decay = (ε_start - ε_end) / (num_episodes * 0.7)
     ε = ε_start
-    result = None
-    step = 0
 
     for episode in range(num_episodes):
         state = env.reset()
         ep_reward = 0
-
+        result = None
+        
         for step in range(max_steps):
-            choices = state['choices']
+            choices = state.get('choices', [])
+            if not choices:
+                break
+                
             action = select_action(model, tokenizer, choices, ε)
             next_state, result, done = env.step(action)
             reward = calc_reward(result, step+1, max_steps)
             ep_reward += reward
-            exp_buf.add(state, action, reward, next_state, done)
+            exp_buf.add(choices, action, reward, next_state.get('choices', []), done)
             state = next_state
             if done:
                 break
+                
         ε = max(ε_end, ε - ε_decay)
         if len(exp_buf) >= 128:
             loss = train_model(model, tokenizer, opt, exp_buf, bs=64)
             metrics['losses'].append(loss)
 
         success = result is not None
-        metrics['success'].append(1 if success else 0)
+        metrics['success_rate'].append(1 if success else 0)
         metrics['avg_steps'].append(step+1)
         metrics['rewards'].append(ep_reward)
 
@@ -292,31 +305,50 @@ class ConstraintLogicEnvironment:
         logger.debug(f'Sending `{data}` to {self.addr}:{self.port}')
         self.sock.send_json(data)
         self.steps_taken += 1
-        next_state = self.sock.recv_json()
+        
+        response = self.sock.recv_json()
+        logger.debug(f'Received response: {response}')
+        
+        # Handle error responses from the Racket server
+        if isinstance(response, dict) and 'error' in response:
+            logger.error(f"Server error: {response['error']}")
+            return {'choices': []}, None, True
+            
         result = None
         done = False
-        assert isinstance(next_state, dict)
-        if 'results' in next_state and next_state['results']:
-            result = next_state['results']
+        
+        if 'results' in response and response['results']:
+            result = response['results']
             done = True
-        elif not next_state['choices']:
+        elif not response.get('choices', []):
             done = True
-        return next_state, result, done
+            
+        return response, result, done
 
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
     tokenizer = tiktoken.get_encoding("cl100k_base")
     n_vocab = tokenizer.n_vocab
     n_embed = 128
     n_hidden = 256
     model = ConstraintScoringNetwork(n_vocab, n_embed, n_hidden)
-    env = ConstraintLogicEnvironment("127.0.0.1", 5555)
-    trained_model, metrics = run_guided_search(model, tokenizer, env)
-    torch.save(trained_model.state_dict(), "constraint_scorer.pt")
-    return trained_model, metrics
+    
+    try:
+        env = ConstraintLogicEnvironment("127.0.0.1", 5555)
+        logger.info("Starting training with 20 episodes to verify system works")
+        trained_model, metrics = run_guided_search(model, tokenizer, env, num_episodes=100)
+        torch.save(trained_model.state_dict(), "constraint_scorer.pt")
+        logger.info("Training completed and model saved")
+        return trained_model, metrics
+    except Exception as e:
+        logger.error(f"Error during training: {e}")
+        raise
 
 def test():
     env = ConstraintLogicEnvironment("127.0.0.1", 5555)
     env.reset()
     env.step(1)
+
 if __name__ == "__main__":
     main()
