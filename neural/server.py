@@ -462,7 +462,7 @@ def run_guided_search(
     max_steps=200,
     lr=5e-3,  # Increased from 1e-3
     γ=0.95,
-    ε_start=0.5,
+    ε_start=0.9,
     ε_end=0.05,
 ):
     # Run debug training to verify model is learning correctly
@@ -500,6 +500,8 @@ def run_guided_search(
             episode_states = []
             episode_actions = []
             episode_rewards = []
+            episode_next_states = []
+            episode_dones = []
 
             # Check if reset failed
             if "error" in state:
@@ -522,15 +524,18 @@ def run_guided_search(
                     logger.error(f"Failed step: {next_state['error']}")
                     break
 
-                reward = calc_reward(result, step + 1, max_steps)
+                # Calculate immediate reward (but we'll use discounted returns later)
+                immediate_reward = calc_reward(result, step + 1, max_steps)
 
                 # Store step information
                 episode_states.append(choices)
                 episode_actions.append(action)
-                episode_rewards.append(reward)
+                episode_rewards.append(immediate_reward)
+                episode_next_states.append(next_state)
+                episode_dones.append(done)
 
-                ep_reward += reward
-                logger.debug(f"reward: {reward:.2f} | ep_reward: {ep_reward:.2f}")
+                ep_reward += immediate_reward
+                logger.debug(f"reward: {immediate_reward:.2f} | ep_reward: {ep_reward:.2f}")
                 state = next_state
                 if done:
                     break
@@ -551,13 +556,13 @@ def run_guided_search(
                         discounted_rewards - discounted_rewards.mean()
                     ) / (discounted_rewards.std() + 1e-9)
 
-                # Add to experience buffer
+                # Add to experience buffer with discounted returns
                 for i in range(len(episode_states)):
                     exp_buf.add(
                         episode_states[i],
                         episode_actions[i],
-                        discounted_rewards[i].item(),
-                        [],  # next_state not needed for REINFORCE
+                        discounted_rewards[i].item(),  # Use discounted return instead of immediate reward
+                        episode_next_states[i],  # Store next_state for potential future use
                         i == len(episode_states) - 1,  # done flag
                     )
 
@@ -821,27 +826,35 @@ def load_model(model_path, model):
         logger.error(f"Error loading model from {model_path}: {e}")
         raise
 
-
 def debug_scores(model, tokenizer, env):
     print("DEBUGGGING")
     rep = env.reset()
     choices = rep["choices"]
     tokens, lengths = preprocess_constraints(tokenizer, choices)
     scores = model(tokens, lengths)
-    print(scores)
     action = select_action(model, tokenizer, choices, 0)
+    print(action, scores)
     rep, res, done = env.step(action)
     choices = rep["choices"]
     tokens, lengths = preprocess_constraints(tokenizer, choices)
     scores = model(tokens, lengths)
-    print(scores)
     action = select_action(model, tokenizer, choices, 0)
+    print(action, scores)
     rep, res, done = env.step(action)
     choices = rep["choices"]
     if choices:  # Check if there are choices available
         tokens, lengths = preprocess_constraints(tokenizer, choices)
         scores = model(tokens, lengths)
-        print(scores)
+        action = select_action(model, tokenizer, choices, 0)
+        print(action, scores)
+    rep, res, done = env.step(action)
+    choices = rep["choices"]
+    if choices:  # Check if there are choices available
+        tokens, lengths = preprocess_constraints(tokenizer, choices)
+        scores = model(tokens, lengths)
+        action = select_action(model, tokenizer, choices, 0)
+        print(action, scores)
+
 
 
 def test():
