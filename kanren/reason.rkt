@@ -29,7 +29,9 @@
     (else (list->hash (hash-set hsh (caar lst) (cdar lst)) (cdr lst)))))
 
 (comment
- (list->hash (hash) '((a 1) (b 2 3 4) (c 5 6))))
+ (list->hash (hash) '((a 1) (b 2 3 4) (c 5 6)))
+
+ )
 
 (define (car-t xs)
   (if (null? xs) '() (car xs)))
@@ -72,9 +74,10 @@
         (q (eval-with-query q))
         (s (init-explore (eval (expand q) (current-namespace)))))
    (let* ((s (explore-choice s step 0))
-          (s (explore-choice s step 1))
-          (s (explore-choice s step 1)))
+          (s (explore-choice s step 0))
+          (s (explore-choice s step 0)))
      (serialize-to-json s qvars)))
+
 ;; "{\"choices\":[\"((state ((a 1 2) (b 3 4))) (goal (conj (== () ()) (== (3 4) (3 4)))))\",\"((state ((a 1 2 3 . #s(var zs 10)) (b . #s(var b 2)))) (goal (conj (conj (== (3 . #s(var zs 10)) (3 . #s(var zs 10))) (== (3 4) (3 4))) (relate (appendo #s(var zs 10) #s(var b 2) (4))))))\"],\"results\":{}}"
  )
 
@@ -148,4 +151,6 @@
   (printf "Server stopped~n"))
 
 (comment
- (stop-server))
+ (stop-server)
+
+ )
