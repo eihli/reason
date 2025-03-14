@@ -215,8 +215,11 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10):
 def calc_reward(result, steps_taken, max_steps=200):
     if result:
         efficiency_modifier = (max_steps - steps_taken) / max_steps
+        mean_val_lengths = sum([len(x) for x in result.items()]) / len(result)
+        diffs = [(len(x) - mean_val_lengths)**2 for x in result.items()]
+        len_modifier = 1 / (sum(diffs) + 0.5)
         base_reward = 10.0
-        return base_reward / efficiency_modifier
+        return (base_reward / efficiency_modifier) * len_modifier
     if steps_taken >= max_steps:
         return -5.0
     else:
@@ -338,7 +341,7 @@ def main():
         env = ConstraintLogicEnvironment("127.0.0.1", 5555)
         logger.info("Starting training with 20 episodes to verify system works")
         trained_model, metrics = run_guided_search(model, tokenizer, env, num_episodes=100)
-        torch.save(trained_model.state_dict(), "constraint_scorer.pt")
+        torch.save(trained_model.state_dict(), "constraint_scorer_len.pt")
         logger.info("Training completed and model saved")
         return trained_model, metrics
     except Exception as e:
@@ -347,7 +350,12 @@ def main():
 
 def test():
     env = ConstraintLogicEnvironment("127.0.0.1", 5555)
-    env.reset()
+    rep = env.reset()
+    action = select_action(trained_model, tokenizer, choices, 0)
+    rep = env.step(action)
+    action = select_action(trained_model, tokenizer, choices, 0)
+    rep = env.step(action)
+
     env.step(1)
 
 if __name__ == "__main__":
