@@ -29,12 +29,18 @@ Core Functionality:
    - Implements automated training with configurable parameters
    - Includes debugging tools to analyze model behavior
 
+5. Problem Abstraction
+   - Supports multiple constraint problem types
+   - Implements curriculum learning for progressive difficulty
+   - Customizes rewards based on problem-specific criteria
+
 Implementation Details:
 ---------------------
 - The ConstraintScoringNetwork uses embeddings, GRU, batch normalization, and attention
 - Experience buffer stores transitions for batch training
 - Rewards are calculated based on solution quality, efficiency, and balanced list lengths
 - Training includes gradient clipping, learning rate scheduling, and reward normalization
+- Problem abstraction allows for flexible training across different problem domains
 
 Example Usage:
 ---------------------
@@ -58,6 +64,13 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.types import Number
 import zmq
+
+from neural.problems import (
+    AppendoProblem, 
+    ProblemRegistry, 
+    ProblemCurriculum,
+    default_registry
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -266,8 +279,12 @@ def train_model(
     return total_loss / epochs if epochs > 0 else 0
 
 
-def calc_reward(result, steps_taken, max_steps=200):
-    """Calculate reward based on result and efficiency"""
+def calc_reward(result, steps_taken, max_steps=200, problem=None):
+    """Calculate reward based on result and efficiency using the problem's reward function if provided."""
+    if problem:
+        return problem.calculate_reward(result, steps_taken, max_steps)
+    
+    # Fallback to original implementation if no problem is provided
     if result:
         # Solution found - increased base reward
         base_reward = 20.0  # Doubled from 10.0
@@ -278,6 +295,7 @@ def calc_reward(result, steps_taken, max_steps=200):
         )  # Increased from 10.0
 
         # Check if solution has balanced list lengths
+        print(result)
         lengths = [len(x) for x in result.values()]
         length_variance = np.var(lengths) if lengths else 0
         length_bonus = 15.0 / (
@@ -329,7 +347,7 @@ def debug_training(model, tokenizer, env, num_trials=5):
             next_state, result, done = env.step(action)
 
             # Store immediate reward but we'll calculate returns later
-            immediate_reward = calc_reward(result, 1, max_steps=200)
+            immediate_reward = env.problem.calculate_reward(result, 1, max_steps=200)
 
             if choices:
                 tokens, lengths = preprocess_constraints(tokenizer, choices)
@@ -401,7 +419,7 @@ def debug_training(model, tokenizer, env, num_trials=5):
         state = env.reset()
         for action in actions_to_try:
             next_state, result, done = env.step(action)
-            reward = calc_reward(result, 1, max_steps=200)
+            reward = env.problem.calculate_reward(result, 1, max_steps=200)
             choices = state.get("choices", [])
             if choices:
                 tokens, lengths = preprocess_constraints(tokenizer, choices)
@@ -428,6 +446,7 @@ def run_guided_search(
     γ=0.95,
     ε_start=0.9,
     ε_end=0.05,
+    curriculum=None,
 ):
     # Run debug training to verify model is learning correctly
     debug_training(model, tokenizer, env)
@@ -458,6 +477,11 @@ def run_guided_search(
 
     try:
         for episode in range(num_episodes):
+            # Update curriculum if provided
+            if curriculum and curriculum.update():
+                env.set_problem(curriculum.get_current_problem())
+                logger.info(f"Curriculum updated to: {env.problem.get_name()}")
+                
             state = env.reset()
 
             # Store episode history
@@ -488,8 +512,8 @@ def run_guided_search(
                     logger.error(f"Failed step: {next_state['error']}")
                     break
 
-                # Calculate immediate reward (but we'll use discounted returns later)
-                immediate_reward = calc_reward(result, step + 1, max_steps)
+                # Calculate immediate reward using the environment's problem
+                immediate_reward = env.get_reward(result, step + 1, max_steps)
 
                 # Store step information
                 episode_states.append(choices)
@@ -590,10 +614,11 @@ def run_guided_search(
 
 
 class ConstraintLogicEnvironment:
-    def __init__(self, addr, port, timeout=1000):  # timeout in milliseconds
+    def __init__(self, addr, port, problem=None, timeout=1000):  # timeout in milliseconds
         self.addr = addr
         self.port = port
         self.timeout = timeout
+        self.problem = problem or AppendoProblem()  # Default to AppendoProblem
         self.ctx = zmq.Context()
         self.sock = self.ctx.socket(zmq.REQ)
         logger.debug(f"Connecting to {self.addr}:{self.port}")
@@ -610,9 +635,15 @@ class ConstraintLogicEnvironment:
             self.sock.close()
         if hasattr(self, "ctx") and self.ctx:
             self.ctx.term()
+            
+    def set_problem(self, problem):
+        """Change the current problem."""
+        self.problem = problem
+        return self
 
     def reset(self):
-        data = {"query": "(query (a b) (appendo a b '(1 2 3 4)))"}
+        query = self.problem.generate_query()
+        data = {"query": query}
         logger.debug(f"Sending `{data}` to {self.addr}:{self.port}")
         self.sock.send_json(data)
 
@@ -658,6 +689,12 @@ class ConstraintLogicEnvironment:
             done = True
 
         return response, result, done
+        
+    def get_reward(self, result, steps_taken=None, max_steps=200):
+        """Calculate reward using the current problem's reward function."""
+        if steps_taken is None:
+            steps_taken = self.steps_taken
+        return self.problem.calculate_reward(result, steps_taken, max_steps)
 
 
 def interactive_mode():
@@ -682,7 +719,22 @@ def interactive_mode():
         model = load_model(model_path, model)
         logger.info(f"Loaded pre-trained model from {model_path}")
 
+    # Create environment with default problem
     env = ConstraintLogicEnvironment("127.0.0.1", 5555, timeout=5000)
+    
+    # Show available problems
+    print("\nAvailable problem types:")
+    for i, name in enumerate(default_registry.get_all_names()):
+        print(f"{i}: {name}")
+    
+    try:
+        problem_idx = int(input("\nSelect a problem type (number): "))
+        problem_name = default_registry.get_all_names()[problem_idx]
+        env.set_problem(default_registry.create(problem_name))
+        print(f"Selected problem: {env.problem.get_name()}")
+    except (ValueError, IndexError):
+        print("Invalid selection, using default problem.")
+    
     state = env.reset()
 
     print("\nInteractive Mode - Press Ctrl+C to exit")
@@ -768,9 +820,18 @@ def main():
 
     try:
         env = ConstraintLogicEnvironment("127.0.0.1", 5555, timeout=2000)
-        logger.info("Starting training with 100 episodes")
+        
+        # Create a curriculum for training
+        curriculum = ProblemCurriculum(default_registry)
+        curriculum.add_stage("appendo-small", episodes=10)
+        curriculum.add_stage("appendo-medium", episodes=15)
+        curriculum.add_stage("appendo-large", episodes=15)
+        
+        logger.info(f"Starting training with curriculum: {[stage[0] for stage in curriculum.stages]}")
+        env.set_problem(curriculum.get_current_problem())
+        
         trained_model, metrics = run_guided_search(
-            model, tokenizer, env, num_episodes=40
+            model, tokenizer, env, num_episodes=40, curriculum=curriculum
         )
         torch.save(trained_model.state_dict(), model_path)
         logger.info("Training completed and model saved")

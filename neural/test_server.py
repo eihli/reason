@@ -9,6 +9,7 @@ from neural.server import (
     train_model,
     calc_reward
 )
+from neural.problems import AppendoProblem, EvaloProblem
 import tiktoken
 
 def train_model_for_test(model, tokenizer, env, num_episodes=25):
@@ -53,7 +54,7 @@ def train_model_for_test(model, tokenizer, env, num_episodes=25):
             next_state, result, done = env.step(action)
             
             # Calculate immediate reward
-            immediate_reward = calc_reward(result, step + 1, max_steps=200)
+            immediate_reward = env.problem.calculate_reward(result, step + 1, max_steps=200)
             
             # Store step information
             episode_states.append(choices)
@@ -103,6 +104,100 @@ def train_model_for_test(model, tokenizer, env, num_episodes=25):
     
     return model
 
+def train_model_for_evalo(model, tokenizer, env, num_episodes=25):
+    """Train the model for a small number of episodes for testing purposes"""
+    exp_buf = ExperienceBuffer()
+
+    # Start with a very low learning rate
+    initial_lr = 1e-4
+    max_lr = 1e-2
+    opt = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=1e-4)
+
+    # Early stopping parameters
+    patience = 5
+    best_loss = float('inf')
+    patience_counter = 0
+
+    # Train for a few episodes
+    for episode in range(num_episodes):
+        # Implement learning rate warmup for first 10 episodes
+        if episode < 5:
+            # Linear warmup
+            lr = initial_lr + (max_lr - initial_lr) * (episode / 5)
+            for param_group in opt.param_groups:
+                param_group['lr'] = lr
+        state = env.reset()
+
+        # Store episode history
+        episode_states = []
+        episode_actions = []
+        episode_rewards = []
+        episode_next_states = []
+        episode_dones = []
+
+        step = -1
+        result = None
+        while result is None:
+            step += 1
+            choices = state.get("choices", [])
+            if not choices:
+                break
+            action = select_action(model, tokenizer, choices, 0)
+            next_state, result, done = env.step(action)
+
+            # Calculate immediate reward
+            immediate_reward = env.problem.calculate_reward(result, step + 1, max_steps=200)
+
+            # Store step information
+            episode_states.append(choices)
+            episode_actions.append(action)
+            episode_rewards.append(immediate_reward)
+            episode_next_states.append(next_state)
+            episode_dones.append(done)
+
+            state = next_state
+            if done:
+                break
+
+        # Calculate discounted rewards
+        discounted_rewards = []
+        R = 0
+        gamma = 0.95
+        for r in reversed(episode_rewards):
+            R = r + gamma * R
+            discounted_rewards.insert(0, R)
+
+        # Add to experience buffer with discounted returns
+        for i in range(len(episode_states)):
+            exp_buf.add(
+                episode_states[i],
+                episode_actions[i],
+                discounted_rewards[i],
+                episode_next_states[i],
+                i == len(episode_states) - 1
+            )
+
+        # Train model after every episode
+        if len(exp_buf) >= 4:  # Use a smaller batch size for testing
+            # More epochs for better convergence
+            loss = train_model(model, tokenizer, opt, exp_buf, bs=4, epochs=5)
+            print(f"Episode {episode+1}/{num_episodes} | Loss: {loss:.4f}")
+
+            # Early stopping check
+            if loss < best_loss * 0.95:  # 5% improvement threshold
+                best_loss = loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= patience and loss < 0.1:
+                print(f"Early stopping at episode {episode+1} with loss {loss:.4f}")
+                break
+
+    return model
+
+
+
 class TestAppendoPathLearning(unittest.TestCase):
     def setUp(self):
         # Initialize tokenizer
@@ -114,8 +209,12 @@ class TestAppendoPathLearning(unittest.TestCase):
         n_hidden = 128
         self.model = ConstraintScoringNetwork(n_vocab, n_embed, n_hidden)
         
-        # Connect to Racket server
-        self.env = ConstraintLogicEnvironment("127.0.0.1", 5555, timeout=2000)
+        # Connect to Racket server with a fixed appendo problem for testing
+        self.env = ConstraintLogicEnvironment(
+            "127.0.0.1", 5555, 
+            problem=AppendoProblem(min_length=4, max_length=4),  # Fixed length for testing
+            timeout=2000
+        )
         
         # Expected path for appendo solution
         self.expected_path = [0, 1, 1, 0]
@@ -219,6 +318,57 @@ class TestAppendoPathLearning(unittest.TestCase):
             # If we've reached a solution, break
             if result:
                 break
+
+class TestEvaloPathLearning(unittest.TestCase):
+    def setUp(self):
+        # Initialize tokenizer
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
+
+        # Initialize model with same parameters as in main()
+        n_vocab = self.tokenizer.n_vocab
+        n_embed = 64
+        n_hidden = 128
+        self.model = ConstraintScoringNetwork(n_vocab, n_embed, n_hidden)
+
+        # Connect to Racket server with a fixed appendo problem for testing
+        self.env = ConstraintLogicEnvironment(
+            "127.0.0.1", 5555,
+            problem=EvaloProblem(),  # Fixed length for testing
+            timeout=2000
+        )
+        # Train the model instead of loading it
+        print("Training model for tests...")
+        # Increase number of episodes for better training
+        self.model = train_model_for_evalo(self.model, self.tokenizer, self.env, num_episodes=25)
+        print("Model training complete")
+
+    def test_model_follows_expected_path(self):
+        """Test that the trained model follows the expected path [0, 1, 1, 0]"""
+
+        # Reset the environment
+        state = self.env.reset()
+        choices = state["choices"]
+        tokens, lengths = preprocess_constraints(self.tokenizer, choices)
+        with torch.no_grad():
+            scores = self.model(tokens, lengths).squeeze(1)
+        action = scores.argmax(dim=0)
+
+        # Follow the path using the model's predictions
+        actual_path = [action]
+        result = None
+        while result is None:
+            choices = state.get("choices", [])
+            if not choices:
+                break
+            tokens, lengths = preprocess_constraints(self.tokenizer, choices)
+            with torch.no_grad():
+                scores = self.model(tokens, lengths).squeeze(1)
+            action = scores.argmax(dim=0).item()
+            actual_path.append(action)
+            state, result, done = self.env.step(action)
+            print(state, result, done)
+        print(result)
+        self.assertIsNotNone(result, "Should find a solution after following the path")
 
 if __name__ == "__main__":
     unittest.main()

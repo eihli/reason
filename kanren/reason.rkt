@@ -51,6 +51,7 @@
   (let ((choices (explore-node-choices (explore-loc-tree s))))
     (define results (takef choices state?))
     (define chs (dropf choices state?))
+    (print (~a results))
     (jsexpr->string (hash 'results (list->hash (hash) (car-t (map serialize-result results)))
                           'choices (map (compose ~a serialize-choice) chs)))))
 
@@ -138,6 +139,7 @@
                                                       (printf "Error processing choice: ~s~n" e)
                                                       (zmq-send responder (jsexpr->string (hash 'error (format "~a" e))))
                                                       (loop s qvars))])
+                            (~a s)(~a qvars)
                             (zmq-send responder (serialize-to-json s qvars))
                             (loop s qvars)))))))))))))))
 
