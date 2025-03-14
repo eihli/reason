@@ -67,7 +67,10 @@ class ConstraintScoringNetwork(nn.Module):
     def __init__(self, n_vocab, n_embed, n_hidden):
         super().__init__()
         self.embedding = nn.Embedding(n_vocab, n_embed)
-
+        
+        # Add layer normalization after embedding
+        self.embed_norm = nn.LayerNorm(n_embed)
+        
         # Add dropout after embedding
         self.embed_dropout = nn.Dropout(0.2)
 
@@ -81,6 +84,7 @@ class ConstraintScoringNetwork(nn.Module):
 
         # Add a hidden layer before final output
         self.hidden = nn.Linear(n_hidden * 2, n_hidden)
+        self.hidden_norm = nn.LayerNorm(n_hidden)  # Add normalization here
         self.relu = nn.ReLU()
         self.fc = nn.Linear(n_hidden, 1)
 
@@ -90,20 +94,22 @@ class ConstraintScoringNetwork(nn.Module):
     def _init_weights(self):
         for name, param in self.named_parameters():
             if "weight" in name:
-                if (
-                    len(param.shape) >= 2
-                ):  # Only apply Xavier to weights with 2+ dimensions
-                    nn.init.xavier_uniform_(param)
+                if "embedding" in name:
+                    # Use normal initialization for embeddings
+                    nn.init.normal_(param, mean=0.0, std=0.02)
+                elif len(param.shape) >= 2:  # Only apply Xavier to weights with 2+ dimensions
+                    # Use a smaller gain for Xavier initialization
+                    nn.init.xavier_uniform_(param, gain=0.5)
                 else:
-                    nn.init.uniform_(
-                        param, -0.1, 0.1
-                    )  # Use simple uniform init for 1D weights
+                    # Use smaller uniform init for 1D weights
+                    nn.init.uniform_(param, -0.05, 0.05)
             elif "bias" in name:
                 nn.init.constant_(param, 0.0)
 
     def forward(self, x, lengths=None):
         # x shape: [batch_size, seq_len]
         embedded = self.embedding(x)  # [batch_size, seq_len, embed_dim]
+        embedded = self.embed_norm(embedded)  # Apply layer norm
         embedded = self.embed_dropout(embedded)
 
         if lengths is not None:
@@ -129,6 +135,7 @@ class ConstraintScoringNetwork(nn.Module):
 
         # Add a hidden layer with ReLU activation
         hidden_out = self.relu(self.hidden(context))
+        hidden_out = self.hidden_norm(hidden_out)  # Apply layer norm
 
         # Final score
         score = self.fc(hidden_out)
@@ -178,67 +185,83 @@ def select_action(
 
 
 def train_model(
-    model, tokenizer, opt, exp_buf, bs=8, epochs=5, clip_grad=5.0
-):  # Increased clip_grad
+    model, tokenizer, opt, exp_buf, bs=8, epochs=5, clip_grad=1.0, accum_steps=4
+):  # Reduced clip_grad, added accum_steps
     if len(exp_buf) < bs:
         return 0
 
     total_loss = 0
     for _ in range(epochs):
-        batch = exp_buf.sample(bs)
-        states, actions, rewards, next_states, dones = zip(*batch)
-
-        # Scale rewards for stronger signal
-        rewards = [r * 2.0 for r in rewards]  # Scale rewards by 2x
-
-        # Process each state-action pair
-        batch_loss = 0
-        valid_samples = 0
-
-        # Debug rewards
-        if rewards:
-            print(
-                f"Batch rewards: min={min(rewards):.2f}, max={max(rewards):.2f}, mean={np.mean(rewards):.2f}"
-            )
-
-        for state, action, reward in zip(states, actions, rewards):
-            if not state:  # Skip empty states
+        # Use smaller batches but accumulate gradients
+        actual_bs = max(1, bs // accum_steps)
+        accumulated_loss = 0
+        
+        opt.zero_grad()  # Zero gradients at the beginning of accumulation
+        
+        for accum_idx in range(accum_steps):
+            if len(exp_buf) < actual_bs:
                 continue
+                
+            batch = exp_buf.sample(actual_bs)
+            states, actions, rewards, next_states, dones = zip(*batch)
+            
+            # Normalize rewards for stability
+            rewards = torch.tensor(rewards)
+            if len(rewards) > 1 and rewards.std() > 0:
+                rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+            rewards = rewards.tolist()
+            
+            # Debug rewards
+            if rewards:
+                logger.debug(
+                    f"Batch rewards: min={min(rewards):.2f}, max={max(rewards):.2f}, mean={np.mean(rewards):.2f}"
+                )
+            
+            # Process each state-action pair
+            batch_loss = 0
+            valid_samples = 0
 
-            tokens, lengths = preprocess_constraints(tokenizer, state)
-            scores = model(tokens, lengths)
+            for state, action, reward in zip(states, actions, rewards):
+                if not state:  # Skip empty states
+                    continue
 
-            probs = F.softmax(scores, dim=0).squeeze(1)
-            assert action < len(probs)
-            action_prob = probs[action]
-            log_prob = torch.log(action_prob + 1e-10)
-            # For policy gradient, we want to maximize reward * log_prob
-            # So our loss is negative of that
-            sample_loss = -log_prob * reward
-            batch_loss += sample_loss
-            valid_samples += 1
+                tokens, lengths = preprocess_constraints(tokenizer, state)
+                scores = model(tokens, lengths)
 
-        if valid_samples > 0:
-            batch_loss = batch_loss / valid_samples
-            print(f"Batch loss: {batch_loss.item():.4f}")
+                probs = F.softmax(scores, dim=0).squeeze(1)
+                assert action < len(probs)
+                action_prob = probs[action]
+                log_prob = torch.log(action_prob + 1e-10)
+                # For policy gradient, we want to maximize reward * log_prob
+                # So our loss is negative of that
+                sample_loss = -log_prob * reward
+                batch_loss += sample_loss
+                valid_samples += 1
 
-            opt.zero_grad()
-            batch_loss.backward()
-
+            if valid_samples > 0:
+                batch_loss = batch_loss / valid_samples
+                # Scale the loss by the number of accumulation steps
+                batch_loss = batch_loss / accum_steps
+                logger.debug(f"Batch loss: {batch_loss.item():.4f}")
+                batch_loss.backward()  # Accumulate gradients without zeroing
+                accumulated_loss += batch_loss.item()
+        
+        # Apply gradients after accumulation
+        if accumulated_loss > 0:
             # Debug gradients
             for name, param in model.named_parameters():
                 if param.requires_grad and param.grad is not None:
                     grad_norm = param.grad.norm().item()
-                    print(f"{name}: grad norm = {grad_norm:.4f}")
+                    logger.debug(f"{name}: grad norm = {grad_norm:.4f}")
 
                     # Add gradient noise to help escape local minima
                     if grad_norm < 0.001:
                         noise = torch.randn_like(param.grad) * 0.01
                         param.grad = param.grad + noise
-
+                        
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
             opt.step()
-            total_loss += batch_loss.item()
+            total_loss += accumulated_loss
 
     return total_loss / epochs if epochs > 0 else 0
 
@@ -279,7 +302,7 @@ def test_calc_reward():
 
 def debug_training(model, tokenizer, env, num_trials=5):
     """Run multiple trials and print detailed debugging info"""
-    print("\n=== DETAILED TRAINING DEBUG ===")
+    logger.debug("\n=== DETAILED TRAINING DEBUG ===")
 
     # Store initial weights for comparison
     initial_weights = {}
@@ -289,7 +312,7 @@ def debug_training(model, tokenizer, env, num_trials=5):
 
     # Run multiple trials
     for trial in range(num_trials):
-        print(f"\nTrial {trial+1}/{num_trials}")
+        logger.debug(f"\nTrial {trial+1}/{num_trials}")
         state = env.reset()
 
         # Store the entire episode
@@ -313,9 +336,9 @@ def debug_training(model, tokenizer, env, num_trials=5):
                 with torch.no_grad():
                     scores = model(tokens, lengths)
                     probs = F.softmax(scores, dim=0)
-                print(f"Initial scores: {scores.tolist()}")
-                print(f"Initial probabilities: {probs.tolist()}")
-                print(f"Immediate reward: {immediate_reward:.2f}")
+                logger.debug(f"Initial scores: {scores.tolist()}")
+                logger.debug(f"Initial probabilities: {probs.tolist()}")
+                logger.debug(f"Immediate reward: {immediate_reward:.2f}")
 
             # Store the transition
             episode_states.append(choices)
@@ -338,8 +361,8 @@ def debug_training(model, tokenizer, env, num_trials=5):
             R = r + gamma * R
             discounted_rewards.insert(0, R)
 
-        print(f"Original rewards: {episode_rewards}")
-        print(f"Discounted returns: {discounted_rewards}")
+        logger.debug(f"Original rewards: {episode_rewards}")
+        logger.debug(f"Discounted returns: {discounted_rewards}")
 
         # Create a mini buffer with the properly calculated returns
         mini_buf = ExperienceBuffer()
@@ -355,22 +378,22 @@ def debug_training(model, tokenizer, env, num_trials=5):
             )
 
         # Print model gradients before training
-        print("\nBefore training:")
+        logger.debug("\nBefore training:")
         for name, param in model.named_parameters():
             if param.requires_grad:
-                print(f"{name}: weight_norm={param.data.norm().item():.6f}")
+                logger.debug(f"{name}: weight_norm={param.data.norm().item():.6f}")
 
         # Train on this single experience
         opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
         loss = train_model(model, tokenizer, opt, mini_buf, bs=len(mini_buf), epochs=5)
-        print(f"Training loss: {loss}")
+        logger.debug(f"Training loss: {loss}")
 
         # Print model gradients after training
-        print("\nAfter training:")
+        logger.debug("\nAfter training:")
         for name, param in model.named_parameters():
             if param.requires_grad:
                 weight_change = param.data - initial_weights[name]
-                print(
+                logger.debug(
                     f"{name}: weight_norm={param.data.norm().item():.6f}, change={weight_change.norm().item():.6f}"
                 )
 
@@ -385,14 +408,14 @@ def debug_training(model, tokenizer, env, num_trials=5):
                 with torch.no_grad():
                     scores = model(tokens, lengths)
                     probs = F.softmax(scores, dim=0)
-                print(f"Updated scores: {scores.tolist()}")
-                print(f"Updated probabilities: {probs.tolist()}")
-                print(f"Updated reward: {reward:.2f}")
+                logger.debug(f"Updated scores: {scores.tolist()}")
+                logger.debug(f"Updated probabilities: {probs.tolist()}")
+                logger.debug(f"Updated reward: {reward:.2f}")
             state = next_state
             if done:
                 break
 
-    print("\n=== DEBUG COMPLETE ===")
+    logger.debug("\n=== DEBUG COMPLETE ===")
 
 
 def run_guided_search(
@@ -768,33 +791,33 @@ def load_model(model_path, model):
         raise
 
 def debug_scores(model, tokenizer, env):
-    print("DEBUGGGING")
+    logger.debug("DEBUGGGING")
     rep = env.reset()
     choices = rep["choices"]
     tokens, lengths = preprocess_constraints(tokenizer, choices)
     scores = model(tokens, lengths)
     action = select_action(model, tokenizer, choices, 0)
-    print(action, scores)
+    logger.debug(f"{action}, {scores}")
     rep, res, done = env.step(action)
     choices = rep["choices"]
     tokens, lengths = preprocess_constraints(tokenizer, choices)
     scores = model(tokens, lengths)
     action = select_action(model, tokenizer, choices, 0)
-    print(action, scores)
+    logger.debug(f"{action}, {scores}")
     rep, res, done = env.step(action)
     choices = rep["choices"]
     if choices:  # Check if there are choices available
         tokens, lengths = preprocess_constraints(tokenizer, choices)
         scores = model(tokens, lengths)
         action = select_action(model, tokenizer, choices, 0)
-        print(action, scores)
+        logger.debug(f"{action}, {scores}")
     rep, res, done = env.step(action)
     choices = rep["choices"]
     if choices:  # Check if there are choices available
         tokens, lengths = preprocess_constraints(tokenizer, choices)
         scores = model(tokens, lengths)
         action = select_action(model, tokenizer, choices, 0)
-        print(action, scores)
+        logger.debug(f"{action}, {scores}")
 
 
 
