@@ -101,6 +101,7 @@ Reinforcement Learning Implementation Details:
 
 """
 
+import pdb
 from typing import Optional
 
 from collections import deque
@@ -125,13 +126,44 @@ class ConstraintScoringNetwork(nn.Module):
     def __init__(self, n_vocab, n_embed, n_hidden):
         super().__init__()
         self.embedding = nn.Embedding(n_vocab, n_embed)
-        self.gru = nn.GRU(n_embed, n_hidden, batch_first=True, bidirectional=True)
+
+        # Add dropout after embedding
+        self.embed_dropout = nn.Dropout(0.2)
+
+        # Use a single-direction GRU with larger hidden size
+        self.gru = nn.GRU(n_embed, n_hidden * 2, batch_first=True, bidirectional=False)
+
+        # Add batch normalization
+        self.bn = nn.BatchNorm1d(n_hidden * 2)
+
         self.attention = nn.Linear(n_hidden * 2, 1)
-        self.fc = nn.Linear(n_hidden * 2, 1)
+
+        # Add a hidden layer before final output
+        self.hidden = nn.Linear(n_hidden * 2, n_hidden)
+        self.relu = nn.ReLU()
+        self.fc = nn.Linear(n_hidden, 1)
+
+        # Initialize weights with a different strategy
+        self._init_weights()
+
+    def _init_weights(self):
+        for name, param in self.named_parameters():
+            if "weight" in name:
+                if (
+                    len(param.shape) >= 2
+                ):  # Only apply Xavier to weights with 2+ dimensions
+                    nn.init.xavier_uniform_(param)
+                else:
+                    nn.init.uniform_(
+                        param, -0.1, 0.1
+                    )  # Use simple uniform init for 1D weights
+            elif "bias" in name:
+                nn.init.constant_(param, 0.0)
 
     def forward(self, x, lengths=None):
         # x shape: [batch_size, seq_len]
         embedded = self.embedding(x)  # [batch_size, seq_len, embed_dim]
+        embedded = self.embed_dropout(embedded)
 
         if lengths is not None:
             # Pack padded sequence for more efficient processing
@@ -143,12 +175,22 @@ class ConstraintScoringNetwork(nn.Module):
         else:
             outputs, hidden = self.gru(embedded)
 
+        # Apply batch normalization
+        # Reshape for batch norm (which expects [N, C, ...])
+        batch_size, seq_len, hidden_size = outputs.shape
+        outputs_reshaped = outputs.transpose(1, 2)  # [batch_size, hidden_size, seq_len]
+        outputs_reshaped = self.bn(outputs_reshaped)
+        outputs = outputs_reshaped.transpose(1, 2)  # [batch_size, seq_len, hidden_size]
+
         # Simple attention mechanism
         attention_weights = F.softmax(self.attention(outputs), dim=1)
         context = torch.sum(attention_weights * outputs, dim=1)
 
+        # Add a hidden layer with ReLU activation
+        hidden_out = self.relu(self.hidden(context))
+
         # Final score
-        score = self.fc(context)
+        score = self.fc(hidden_out)
         return score
 
 
@@ -194,7 +236,9 @@ def select_action(
     return int(action)
 
 
-def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10, clip_grad=1.0):
+def train_model(
+    model, tokenizer, opt, exp_buf, bs=8, epochs=5, clip_grad=5.0
+):  # Increased clip_grad
     if len(exp_buf) < bs:
         return 0
 
@@ -202,6 +246,9 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10, clip_grad=1.0)
     for _ in range(epochs):
         batch = exp_buf.sample(bs)
         states, actions, rewards, next_states, dones = zip(*batch)
+
+        # Scale rewards for stronger signal
+        rewards = [r * 2.0 for r in rewards]  # Scale rewards by 2x
 
         # Process each state-action pair
         batch_loss = 0
@@ -221,14 +268,14 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10, clip_grad=1.0)
             scores = model(tokens, lengths)
 
             probs = F.softmax(scores, dim=0).squeeze(1)
-            if action < len(probs):
-                action_prob = probs[action]
-                log_prob = torch.log(action_prob + 1e-10)
-                # For policy gradient, we want to maximize reward * log_prob
-                # So our loss is negative of that
-                sample_loss = -log_prob * reward
-                batch_loss += sample_loss
-                valid_samples += 1
+            assert action < len(probs)
+            action_prob = probs[action]
+            log_prob = torch.log(action_prob + 1e-10)
+            # For policy gradient, we want to maximize reward * log_prob
+            # So our loss is negative of that
+            sample_loss = -log_prob * reward
+            batch_loss += sample_loss
+            valid_samples += 1
 
         if valid_samples > 0:
             batch_loss = batch_loss / valid_samples
@@ -240,7 +287,13 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10, clip_grad=1.0)
             # Debug gradients
             for name, param in model.named_parameters():
                 if param.requires_grad and param.grad is not None:
-                    print(f"{name}: grad norm = {param.grad.norm().item():.4f}")
+                    grad_norm = param.grad.norm().item()
+                    print(f"{name}: grad norm = {grad_norm:.4f}")
+
+                    # Add gradient noise to help escape local minima
+                    if grad_norm < 0.001:
+                        noise = torch.randn_like(param.grad) * 0.01
+                        param.grad = param.grad + noise
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
             opt.step()
@@ -252,29 +305,28 @@ def train_model(model, tokenizer, opt, exp_buf, bs=64, epochs=10, clip_grad=1.0)
 def calc_reward(result, steps_taken, max_steps=200):
     """Calculate reward based on result and efficiency"""
     if result:
-        # Solution found - base reward
-        base_reward = 2.0
+        # Solution found - increased base reward
+        base_reward = 20.0  # Doubled from 10.0
 
         # Efficiency bonus - more steps = less bonus
-        efficiency_bonus = max(0, (max_steps - steps_taken) / max_steps * 5.0)
+        efficiency_bonus = max(
+            0, (max_steps - steps_taken) / max_steps * 15.0
+        )  # Increased from 10.0
 
         # Check if solution has balanced list lengths
-        if len(result) >= 2:
-            lengths = [len(x) for x in result.values()]
-            length_variance = np.var(lengths) if lengths else 0
-            length_bonus = 5.0 / (
-                1.0 + length_variance
-            )  # Higher variance = lower bonus
-        else:
-            length_bonus = 0
+        lengths = [len(x) for x in result.values()]
+        length_variance = np.var(lengths) if lengths else 0
+        length_bonus = 15.0 / (
+            1.0 + length_variance
+        )  # Higher variance = lower bonus, increased from 10.0
 
         return base_reward + efficiency_bonus + length_bonus
     elif steps_taken >= max_steps:
-        # Ran out of steps without solution
-        return -2.0
+        # Ran out of steps without solution - increased penalty
+        return 0  # Doubled from -5.0
     else:
         # No solution yet, small penalty to encourage efficiency
-        return -0.1
+        return 1  # Slightly increased from -0.2
 
 
 def test_calc_reward():
@@ -284,20 +336,148 @@ def test_calc_reward():
     calc_reward(result_1, steps_taken), calc_reward(result_2, steps_taken)
 
 
+def debug_training(model, tokenizer, env, num_trials=5):
+    """Run multiple trials and print detailed debugging info"""
+    print("\n=== DETAILED TRAINING DEBUG ===")
+
+    # Store initial weights for comparison
+    initial_weights = {}
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            initial_weights[name] = param.data.clone()
+
+    # Run multiple trials
+    for trial in range(num_trials):
+        print(f"\nTrial {trial+1}/{num_trials}")
+        state = env.reset()
+
+        # Store the entire episode
+        episode_states = []
+        episode_actions = []
+        episode_rewards = []
+        episode_next_states = []
+        episode_dones = []
+
+        # Run a fixed sequence of actions
+        actions_to_try = [0, 1, 1, 0]
+        for action in actions_to_try:
+            choices = state.get("choices", [])
+            next_state, result, done = env.step(action)
+
+            # Store immediate reward but we'll calculate returns later
+            immediate_reward = calc_reward(result, 1, max_steps=200)
+
+            if choices:
+                tokens, lengths = preprocess_constraints(tokenizer, choices)
+                with torch.no_grad():
+                    scores = model(tokens, lengths)
+                    probs = F.softmax(scores, dim=0)
+                print(f"Initial scores: {scores.tolist()}")
+                print(f"Initial probabilities: {probs.tolist()}")
+                print(f"Immediate reward: {immediate_reward:.2f}")
+
+            # Store the transition
+            episode_states.append(choices)
+            episode_actions.append(action)
+            episode_rewards.append(immediate_reward)
+            episode_next_states.append(next_state)
+            episode_dones.append(done)
+
+            state = next_state
+
+            # If we reach a terminal state, break
+            if done:
+                break
+
+        # Calculate discounted returns - propagate final rewards back
+        discounted_rewards = []
+        R = 0
+        gamma = 0.95  # Discount factor
+        for r in reversed(episode_rewards):
+            R = r + gamma * R
+            discounted_rewards.insert(0, R)
+
+        print(f"Original rewards: {episode_rewards}")
+        print(f"Discounted returns: {discounted_rewards}")
+
+        # Create a mini buffer with the properly calculated returns
+        mini_buf = ExperienceBuffer()
+        for i in range(len(episode_states)):
+            mini_buf.add(
+                episode_states[i],
+                episode_actions[i],
+                discounted_rewards[
+                    i
+                ],  # Use discounted return instead of immediate reward
+                episode_next_states[i],
+                episode_dones[i],
+            )
+
+        # Print model gradients before training
+        print("\nBefore training:")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(f"{name}: weight_norm={param.data.norm().item():.6f}")
+
+        # Train on this single experience
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        loss = train_model(model, tokenizer, opt, mini_buf, bs=len(mini_buf), epochs=5)
+        print(f"Training loss: {loss}")
+
+        # Print model gradients after training
+        print("\nAfter training:")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                weight_change = param.data - initial_weights[name]
+                print(
+                    f"{name}: weight_norm={param.data.norm().item():.6f}, change={weight_change.norm().item():.6f}"
+                )
+
+        # Test the updated model on the same sequence
+        state = env.reset()
+        for action in actions_to_try:
+            next_state, result, done = env.step(action)
+            reward = calc_reward(result, 1, max_steps=200)
+            choices = state.get("choices", [])
+            if choices:
+                tokens, lengths = preprocess_constraints(tokenizer, choices)
+                with torch.no_grad():
+                    scores = model(tokens, lengths)
+                    probs = F.softmax(scores, dim=0)
+                print(f"Updated scores: {scores.tolist()}")
+                print(f"Updated probabilities: {probs.tolist()}")
+                print(f"Updated reward: {reward:.2f}")
+            state = next_state
+            if done:
+                break
+
+    print("\n=== DEBUG COMPLETE ===")
+
+
 def run_guided_search(
     model,
     tokenizer,
     env,
     num_episodes=40,
     max_steps=200,
-    lr=5e-5,
+    lr=5e-3,  # Increased from 1e-3
     γ=0.95,
     ε_start=0.5,
     ε_end=0.05,
 ):
+    # Run debug training to verify model is learning correctly
+    debug_training(model, tokenizer, env)
+
     exp_buf = ExperienceBuffer()
-    opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    bs = 16  # Batch size
+    # Use a different optimizer with weight decay
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+    # Add a learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode="max", factor=0.5, patience=5, verbose=True
+    )
+
+    bs = 8  # Batch size
 
     metrics = {
         "success_rate": [],
@@ -381,12 +561,22 @@ def run_guided_search(
                         i == len(episode_states) - 1,  # done flag
                     )
 
-            # Train model
-            if len(exp_buf) >= bs and (episode + 1) % 10 == 0:
-                debug_scores(model, tokenizer, env)
+            # Train model after every episode
+            if len(exp_buf) >= bs:
                 loss = train_model(model, tokenizer, opt, exp_buf, bs=bs)
-                debug_scores(model, tokenizer, env)
                 metrics["losses"].append(loss)
+
+                # Update learning rate scheduler based on average reward
+                avg_reward = (
+                    np.mean(metrics["rewards"][-10:])
+                    if len(metrics["rewards"]) >= 10
+                    else 0
+                )
+                scheduler.step(avg_reward)
+
+                # Debug scores every 5 episodes
+                if (episode + 1) % 5 == 0:
+                    debug_scores(model, tokenizer, env)
 
             # Update exploration rate
             ε = max(ε_end, ε - ε_decay)
@@ -592,7 +782,7 @@ def interactive_mode():
 
 def main():
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
@@ -602,7 +792,7 @@ def main():
     n_hidden = 128
     model = ConstraintScoringNetwork(n_vocab, n_embed, n_hidden)
 
-    model_path = "./constraint_scorer.pt"
+    model_path = "./constraint_scorer_error.pt"
     if os.path.exists(model_path):
         model = load_model(model_path, model)
         logger.info(f"Loaded pre-trained model from {model_path}")
@@ -648,8 +838,10 @@ def debug_scores(model, tokenizer, env):
     action = select_action(model, tokenizer, choices, 0)
     rep, res, done = env.step(action)
     choices = rep["choices"]
-    scores = model(tokens, lengths)
-    print(scores)
+    if choices:  # Check if there are choices available
+        tokens, lengths = preprocess_constraints(tokenizer, choices)
+        scores = model(tokens, lengths)
+        print(scores)
 
 
 def test():
@@ -659,7 +851,6 @@ def test():
     n_hidden = 128
     model = ConstraintScoringNetwork(n_vocab, n_embed, n_hidden)
     model = load_model("./constraint_scorer_len.pt", model)
-    model = trained_model
     env = ConstraintLogicEnvironment("127.0.0.1", 5555)
     rep = env.reset()
     choices = rep["choices"]
