@@ -1,104 +1,45 @@
 """Neural Network Guided Search for Constraint Logic Programming.
 
-This module implements a neural network-based scoring system to guid the search
-process in a constraint logic programming system (like miniKanren). The system
-works by evaluating and scoring possible search paths (candidate constraints)
-and using these scores to guide the exploration of the search space.
+This module implements a neural network-based scoring system to guide the search
+process in a constraint logic programming system (miniKanren). The system works by
+evaluating and scoring possible search paths and using these scores to guide the
+exploration of the search space.
 
 Core Functionality:
 -----------------
-1. Parse search states from a text-based representation containing:
-   - Results: Previously found solutions (if any)
-   - Choices: Candidate constraints to explore next
+1. Communication with a Racket server running miniKanren via ZeroMQ
+   - Sends queries to initialize search
+   - Receives search states containing results and choices
+   - Sends choice selections to expand the search
 
-2. For each choice in the search state:
-   - Tokenize the constraint representation
-   - Pass the tokens through a neural network model to get a score
-   - Normalize scores across all choices using softmax
+2. Neural Network Scoring
+   - Tokenizes constraint representations using tiktoken
+   - Processes tokens through a GRU-based neural network with attention
+   - Outputs scores for each available choice
+   - Uses softmax to convert scores to probabilities
 
-3. Select a choice to explore using either:
-   - Greedy selection (highest scoring choice)
-   - Weighted random sampling based on softmax probabilities
+3. Reinforcement Learning
+   - Implements an experience buffer to store state-action-reward transitions
+   - Calculates rewards based on solution quality and search efficiency
+   - Uses policy gradient methods to update the neural network
+   - Supports exploration via epsilon-greedy strategy
 
-4. Continue the search process by expanding the selected choice
-   - When a solution is found (appears in results), calculate reward
-   - Use this reward signal to update the neural network via reinforcement learning
+4. Interactive and Training Modes
+   - Provides an interactive mode for manual exploration
+   - Implements automated training with configurable parameters
+   - Includes debugging tools to analyze model behavior
 
 Implementation Details:
 ---------------------
-- Tokenization uses the tiktoken library with the cl100k_base encoding
-- The search state is represented as S-expressions in a Lisp-like format
-- The neural model should be trained to recognize promising constraint patterns
-- Reinforcement learning is used to improve model performance over time
+- The ConstraintScoringNetwork uses embeddings, GRU, batch normalization, and attention
+- Experience buffer stores transitions for batch training
+- Rewards are calculated based on solution quality, efficiency, and balanced list lengths
+- Training includes gradient clipping, learning rate scheduling, and reward normalization
 
-Example Input (partial candidates):
+Example Usage:
 ---------------------
-'(search-state
-  (results)
-  (choices
-   (choice (state (vars (a 1 2) (b 3 4))) (goal (conj (== () ()) (== (3 4) (3 4)))))
-   (choice
-    (state (vars (a 1 2 . #s(var b 20)) (b . #s(var b 15))))
-    (goal
-     (conj
-      (conj (relate (conso #s(var a 22) #s(var b 23) #s(var b 20))) (relate (conso #s(var a 22) #s(var bc 24) (3 4))))
-      (relate (appendo #s(var b 23) #s(var b 15) #s(var bc 24))))))))
-
-Example Input (result):
----------------------
-'(search-state (results (state (vars (a 1) (b 2 3 4)))) (choices))
-
-Example Input (dead end):
----------------------
-'(search-state (results) (choices))
-
-Description of Inputs
----------------------
-
-Each choice in the lsit of partial candidates (choices) will get tokenized and
-scored separately.
-
-    import tiktoken
-    enc = tiktoken.get_encoding("cl100k_base")
-    tokens = [enc.tokenize(choice) for choice in choices]
-
-Then, we'll softmax over the scores and use weighted random sampling to select a
-choice to explore/expand.
-
-When we get a result, we'll pass the result to a scoring function. That reward
-(or penalty) will get propagated back to the model,
-reinforcement-learning-style.
-
-Reinforcement Learning Implementation Details:
----------------------
-1. Policy Network:
-   - Implement a neural network that takes tokenized constraint representations as input
-   - The network outputs a score for each choice representing the likelihood it leads to a solution
-   - The policy is defined by the softmax over these scores
-
-2. Reward Structure:
-   - Positive reward when a solution is found (proportional to solution quality or inverse of search depth)
-   - Small negative reward for each step without finding a solution (encourages efficiency)
-   - Larger negative reward for search branches that fail completely
-
-3. Training Algorithm:
-   - Use Proximal Policy Optimization (PPO) or Advantage Actor-Critic (A2C)
-   - Maintain an experience buffer storing (state, action, reward, next_state) tuples
-   - Periodically update the policy network using batches from this buffer
-   - Employ entropy regularization to encourage exploration of diverse search paths
-
-4. Optimization Strategy:
-   - Use mini-batch gradient descent with Adam optimizer
-   - Implement learning rate scheduling to stabilize training
-   - Add value function estimation to reduce variance in policy updates
-   - Employ gradient clipping to prevent exploding gradients
-
-5. Evaluation Metrics:
-   - Track average steps to solution
-   - Measure success rate across different problem instances
-   - Compare performance against baseline search strategies (random, heuristic-based)
-   - Monitor entropy of policy distributions to ensure adequate exploration
-
+- Run in training mode: `python neural/server.py`
+- Run in interactive mode: `python neural/server.py --interactive`
 """
 
 import pdb
