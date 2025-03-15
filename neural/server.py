@@ -929,3 +929,11 @@ if __name__ == "__main__":
         interactive_mode()
     else:
         main()
+    context = zmq.Context()
+    responder = context.socket(zmq.REP)
+    responder.bind("tcp://*:5555")
+    while True:
+        message = responder.recv()
+        print(f"Received request: {message}")
+        responder.send(b"World")
+
