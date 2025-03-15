@@ -91,60 +91,61 @@
   (context-close! ctx)
   (printf "Socket closed~n"))
 
-(define (responder-thread ctx sock)
-  (thread (lambda ()
-            (define poll-items (make-vector 1 (make-poll-item sock 0 '(POLLIN) '())))
-            (socket-bind! sock "tcp://127.0.0.1:5555")
-            (printf "Server started on tcp://127.0.0.1:5555~n")
-            (let loop ([s '()]
-                       [qvars '()])
-              (with-handlers ([exn:fail? (lambda (e) (loop s qvars))])
-                (printf "Polling ...~n")
-                (let ([rc (poll! poll-items 1000)])
-                  (printf "Polling done.~n")
-                  (when (not (zero? rc))
-                    (let ([msg (socket-recv! sock)])
-                      (when (and msg (not (zero? (bytes-length msg))))
-                        (let ([msg (string->jsexpr (bytes->string/utf-8 msg))])
-                          (printf "Server received: ~s~n" msg)
-                          (cond
-                            [(hash-has-key? msg 'query)
-                             (printf "Received a reset.~n")
-                             (let* ([q (hash-ref msg 'query)]
-                                    [qvars (cadr (read (open-input-string q)))]
-                                    [q (eval-with-query q)]
-                                    [s (init-explore (eval (expand q) (current-namespace)))])
-                               ;; Send the response
-                               (define response (string->bytes/utf-8 (serialize-to-json s qvars)))
-                               (socket-send! sock response)
-                               (loop s qvars))]
-                            [(hash-has-key? msg 'choice)
-                             (printf "Received a choice: ~a~n" (hash-ref msg 'choice))
-                             (let* ([choice (hash-ref msg 'choice)]
-                                    [s (explore-choice s step choice)])
-                               (with-handlers ([exn:fail? (lambda (e)
-                                                            (printf "Error processing choice: ~s~n" e)
-                                                            (socket-send! sock
-                                                                          (string->bytes/utf-8
-                                                                           (jsexpr->string
-                                                                            (hash 'error
-                                                                                  (format "~a" e)))))
-                                                            (loop s qvars))])
-                                 (socket-send! sock (string->bytes/utf-8 (serialize-to-json s qvars)))
-                                 (loop s qvars)))])))
-                      (loop s qvars)))))))))
+(define (responder-thread sock)
+  (thread
+   (lambda ()
+     (define poll-items (make-vector 1 (make-poll-item sock 0 '(POLLIN) '())))
+     (socket-bind! sock "tcp://127.0.0.1:5555")
+     (printf "Server started on tcp://127.0.0.1:5555~n")
+     (let loop ([s '()]
+                [qvars '()])
+       (with-handlers ([exn:fail? (lambda (e) (loop s qvars))])
+         (printf "Polling ...~n")
+         (let ([rc (poll! poll-items 1000)])
+           (printf "Polling done.~n")
+           (when (not (zero? rc))
+             (let ([msg (socket-recv! sock)])
+               (when (and msg (not (zero? (bytes-length msg))))
+                 (let ([msg (string->jsexpr (bytes->string/utf-8 msg))])
+                   (printf "Server received: ~s~n" msg)
+                   (cond
+                     [(hash-has-key? msg 'query)
+                      (printf "Received a reset.~n")
+                      (let* ([q (hash-ref msg 'query)]
+                             [qvars (cadr (read (open-input-string q)))]
+                             [q (eval-with-query q)]
+                             [s (init-explore (eval (expand q) (current-namespace)))])
+                        ;; Send the response
+                        (define response (string->bytes/utf-8 (serialize-to-json s qvars)))
+                        (socket-send! sock response)
+                        (loop s qvars))]
+                     [(hash-has-key? msg 'choice)
+                      (printf "Received a choice: ~a~n" (hash-ref msg 'choice))
+                      (let* ([choice (hash-ref msg 'choice)]
+                             [s (explore-choice s step choice)])
+                        (with-handlers ([exn:fail? (lambda (e)
+                                                     (printf "Error processing choice: ~s~n" e)
+                                                     (socket-send! sock
+                                                                   (string->bytes/utf-8
+                                                                    (jsexpr->string
+                                                                     (hash 'error
+                                                                           (format "~a" e)))))
+                                                     (loop s qvars))])
+                          (socket-send! sock (string->bytes/utf-8 (serialize-to-json s qvars)))
+                          (loop s qvars)))])))
+               (loop s qvars)))))))))
 
-(comment (define server-thread (responder-thread)))
+(comment (define-values (thr ctx soc) (start-server)))
 
 (define (start-server)
   (define ctx (context 1))
   (define sock (socket ctx 'REP))
-  (define thr (responder-thread ctx sock))
+  (define thr (responder-thread sock))
   (values thr ctx sock))
 
 (define (stop-server thr ctx sock)
   (printf "Stopping server...~n")
   (shutdown ctx sock)
-  (thread-wait thr))
+  (kill-thread thr))
 
 (comment (stop-server))
