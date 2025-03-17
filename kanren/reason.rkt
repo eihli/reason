@@ -169,3 +169,65 @@
   (printf "starting server~n")
   (start-server)
   )
+
+
+
+(let* ((s (init-explore (query (a b) (appendo a b '(1 2 3 4)))))
+       (s (explore-choice s step 0))
+       (s (explore-choice s step 1))
+       (s (explore-choice s step 1))
+       (s (explore-choice s step 0)))
+  s)
+
+
+
+
+;; What follows is some utilities to help us generate training examples.
+;; Why do we need this?
+;; Why can't we just let the model explore on its own?
+;; Because some problems don't yield a success/result for a long time.
+;; It's better to have some positive examples to bootstrap a reasonable
+;; search policy.
+
+;; policy-print, policy-read, policy-done?
+(define (gen-train-example-write-policy exp-loc qvars)
+  (define tree (explore-loc-tree exp-loc))
+  #| (printf "Tree: ~s\n" tree) |#
+  #| (printf "Context: ~s\n" (explore-loc-context exp-loc)) |#
+  (pprint-choices (explore-node-choices tree) qvars))
+
+(define (gen-train-example-read-policy)
+  (printf "\n[u]ndo, or choice number> \n")
+  (read))
+(define (gen-train-example-finished? exp-loc)
+  (let* ([tree (explore-loc-tree exp-loc)]
+         [choices (explore-node-choices tree)]
+         [finished-index (index-where
+                           choices
+                           (lambda (x) (state? x)))]
+        [valid-index (exact-nonnegative-integer? finished-index)])
+    valid-index))
+
+(define (drive/policy step qvars policy-print policy-read policy-done? init-state)
+  (let loop ([s init-state])
+    (unless (policy-done? s)
+      (let* ([input (policy-read)]
+             [tree (explore-loc-tree s)])
+        (loop
+          (cond
+            [(and (integer? input) (<= 1 input) (<= input (length (explore-node-choices tree))))
+             (explore-choice s step (- input 1))]
+            [(or (eq? input 'u) (eq? input 'undo)) (explore-undo s)]
+            [else s])))
+      s)))
+
+(define-syntax drive/training-examples
+  (syntax-rules (query)
+    [(_ step (query (qvars ...) body ...))
+     (drive/policy
+      step
+      '(qvars ...)
+      gen-train-example-write-policy
+      gen-train-example-read-policy
+      gen-train-example-finished?
+      (init-explore (query (qvars ...) body ...)))]))
