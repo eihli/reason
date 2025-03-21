@@ -105,7 +105,7 @@
 
 
 (define results
-  (zipper-biased-interleaving-multi (query (a b) (appendo a b '(1 2 3 4))) 1000 5))
+  (zipper-biased-interleaving-multi (query (a b) (appendo a b '(1 2 3 4))) 6 5))
 
 ;; Access the first result and its explore-loc
 (define first-result-state (caar results))
