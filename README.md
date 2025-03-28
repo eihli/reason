@@ -189,3 +189,10 @@ Given our input is a utf-8 description of a single choice, in a format that look
 One added benefit if we go the route of transformers is that we can visualize the query/key values and see which tokens are most important when making a decision. This might provide some valuable interpretability to our model. We might gain insights like "it's always valuable to follow large increases in linear dimensions with large dropouts".
 
 This scheme will serve double duty because we can prefix the choice with high-level description of what we're trying to do, like "categorize 28x28x3 images of handwritten digits into 10 categories | (bind (state (((var #f 0) (var a 11) (var b 12))) () () ()) (conj (conj (== (var a 11) ((var a1 13) . (var a2 14))) (relate (appendo #s(var a2 14) #s(var b 12) #s(var res 15)))) (== (1 2 3 4) ((var a1 13) . (var res 15)))))"
+
+# Related work
+
+- DeepCoder https://games-automata-play.github.io/blog/deepcoder/
+- LambdaBeam https://github.com/ellisk42/LambdaBeam
+- RobustFill https://github.com/yeoedward/Robust-Fill
+- FlashFill https://github.com/Qi-Zhan/FlashFill

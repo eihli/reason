@@ -49,14 +49,61 @@
 
 
 
-(run 1 (q) (eval-expo `(lower ,(make-string "ERIC")) '() q))
+;; (run 1 (q)
+;;      (eval-expo `(app ,q) '(,(make-string "E")) '((e)))
+;;      (eval-expo `(app ,q) '(,(make-string "T")) '((t))))
 
-(run 1 (q) (stringo q))
+;; (run 20 (q)
+;;      (eval-expo q '(,(make-string "ERIC")) '((e))))
 
-(run 5 (q) (string-to-lowero (make-string "ERIC") q))
+;; (make-string "ERIC")
 
-(run 20 (a b) (eval-expo `(char ,a) '() b))
-(run 20 (q) (eval-expo q '() `(e r i c)))
+;; (run 1 (q) (eval-expo `(lower ,(make-string "ERIC")) '() q))
+;; (run 1 (q) (eval-expo `(lower ,(make-string "TAY")) '() q))
+
+;; (run 1 (q) (eval-expo q '() `(char e)))
+
+;; (run 1 (q)
+;;      (eval-expo `(app ,q ,(make-string "ERIC")) '() '(e r i c))
+;;      (eval-expo `(app ,q ,(make-string "TAY")) '() '(t a y))
+;;      )
+
+;; (run 1 (q)
+;;      (== q `(lambda (list (car (lower (var ()))))))
+;;      (eval-expo `(app ,q ,(make-string "ERIC")) '() '(e))
+;;      (eval-expo `(app ,q ,(make-string "TAY")) '() '(t))
+;;      )
+
+;; (time
+;;  (run 1 (q)
+;;       (eval-expo `(app ,q ,(make-string "ERIC")) '() '(e))
+;;       (eval-expo `(app ,q ,(make-string "TAY")) '() '(t))
+;;       ))
+
+;; (time
+;;  (run 1 (q r)
+;;       (== q `(app (lambda (list (var ()) (var (s)))) (char a)))
+;;       (eval-expo q `(b) r)))
+
+(time
+ (run 1 (q r)
+      (== q `(app
+              (lambda
+                (list (var ())
+                      (app
+                       (lambda (var (s)))
+                       (char b))))
+              (char a)))
+      (eval-expo q `() r)))
+
+;; (run 1 (a b c)
+;;      (== a `(app (lambda (list (var ()) (var (s)))) (char a)))
+;;      (eval-expo a b c)
+;;      )
+
+;; (run 20 (a b) (eval-expo `(char ,a) '() b))
+
+;; (run 10 (q) (eval-expo q '() `(e r i c)))
 
 ;; TODO:
 ;; I'm in the middle of refactoring to make "strings" simply "lists of (char <c>)".
@@ -73,13 +120,14 @@
            (== `(lower ,c) expr)          ;; expr is a to-lowercase operation
            (eval-expo c env vc)
            (chars-to-lowero vc value)))
+   ((fresh (c vc)
+           (== `(upper ,c) expr)          ;; expr is a to-lowercase operation
+           (eval-expo c env vc)
+           (chars-to-lowero vc value)))
    ((fresh (c)
            (== `(char ,c) expr)           ;; expr is a character
            (charo value)
            (eval-expo c env value)))
-   ((charo expr) (== expr value))
-   ;; ((stringo expr)                     ;; don't need stringo if it's just a list of chars
-   ;;  (== expr value))
    ((fresh (index)
            (== `(var ,index) expr)        ;; expr is a variable
            (lookupo index env value)))
@@ -352,13 +400,13 @@
 
 (run 1 (q) (eval-expo `(lower ,(make-string "Eric")) '()  q))
 
-(run 1 (q)
-     (eval-expo `(app ,q (var ())) `((,make-string "A")) (make-string "a"))
-     (eval-expo `(app ,q (var ())) `((,make-string "B")) (make-string "b")))
+;; (run 1 (q)
+;;      (eval-expo `(app ,q (var ())) `((,make-string "A")) (make-string "a"))
+;;      (eval-expo `(app ,q (var ())) `((,make-string "B")) (make-string "b")))
 
-(run 1 (q)
-     (eval-expo `(app ,q (var ())) `(,(make-string "Eric")) (make-string "e"))
-     (eval-expo `(app ,q (var ())) `(,(make-string "Tay")) (make-string "t"))
-     )
+;; (run 1 (q)
+;;      (eval-expo `(app ,q (var ())) `(,(make-string "Eric")) (make-string "e"))
+;;      (eval-expo `(app ,q (var ())) `(,(make-string "Tay")) (make-string "t"))
+;;      )
 
 ;; (run 1 (q) (eval-expo `(chars-to-lowero (A) ,q) '() `(a)))
