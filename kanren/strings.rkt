@@ -46,91 +46,62 @@
            (minuso idx '(1) dec-i)
            (ntho cdr-lst dec-i val)))))
 
+(define (substr str idx sbst)
+  (cond
+    ((= 0 idx) (reverse sbst))
+    (else (substr (cdr str) (- idx 1) (cons (car str) sbst)))))
 
+(define-relation (reverseo xs ys)
+  (reverse-accumulateo xs '() ys))
 
+;; Helper relation that uses an accumulator
+(define-relation (reverse-accumulateo xs acc ys)
+  (conde
+    ;; Base case: if the input list is empty, return the accumulator
+    ((== xs '()) (== acc ys))
+    ;; Recursive case: take the first element from the input list,
+    ;; add it to the front of the accumulator, and continue with the rest
+    ((fresh (head tail)
+      (== `(,head . ,tail) xs)
+      (reverse-accumulateo tail `(,head . ,acc) ys)))))
 
-;; (run 1 (q)
-;;      (eval-expo `(app ,q) '(,(make-string "E")) '((e)))
-;;      (eval-expo `(app ,q) '(,(make-string "T")) '((t))))
+;; Extracts a substring [0, index) from a string (a list of symbols)
+(define-relation (substro str index substring)
+  (conde
+    ((== index '()) (== substring '()))
+    ((fresh (n-1 head tail suffix)
+       (poso index)                        ; Ensure index is positive
+       (== `(,head . ,tail) str)           ; Decompose string into head and tail
+       (== `(,head . ,suffix) substring)   ; Add head to the substring
+       (minuso index '(1) n-1)             ; Decrement index (index - 1)
+       (substro tail n-1 suffix)))))       ; Continue with rest of string
 
-;; (run 20 (q)
-;;      (eval-expo q '(,(make-string "ERIC")) '((e))))
+(substr '(a b c d e f g) 3 '())
 
-;; (make-string "ERIC")
+(run 1 (a b) (reverseo '(a b c) b))
+(run 1 (a b) (substro '(a b c d e f) '(1 1) b))
 
-;; (run 1 (q) (eval-expo `(lower ,(make-string "ERIC")) '() q))
-;; (run 1 (q) (eval-expo `(lower ,(make-string "TAY")) '() q))
-
-;; (run 1 (q) (eval-expo q '() `(char e)))
-
-;; (run 1 (q)
-;;      (eval-expo `(app ,q ,(make-string "ERIC")) '() '(e r i c))
-;;      (eval-expo `(app ,q ,(make-string "TAY")) '() '(t a y))
-;;      )
-
-;; (run 1 (q)
-;;      (== q `(lambda (list (car (lower (var ()))))))
-;;      (eval-expo `(app ,q ,(make-string "ERIC")) '() '(e))
-;;      (eval-expo `(app ,q ,(make-string "TAY")) '() '(t))
-;;      )
-
-;; (time
-;;  (run 1 (q)
-;;       (eval-expo `(app ,q ,(make-string "ERIC")) '() '(e))
-;;       (eval-expo `(app ,q ,(make-string "TAY")) '() '(t))
-;;       ))
-
-;; (time
-;;  (run 1 (q r)
-;;       (== q `(app (lambda (list (var ()) (var (s)))) (char a)))
-;;       (eval-expo q `(b) r)))
-
-(time
- (run 1 (q r)
-      (== q `(app
-              (lambda
-                (list (var ())
-                      (app
-                       (lambda (var (s)))
-                       (char b))))
-              (char a)))
-      (eval-expo q `() r)))
-
-;; (run 1 (a b c)
-;;      (== a `(app (lambda (list (var ()) (var (s)))) (char a)))
-;;      (eval-expo a b c)
-;;      )
-
-;; (run 20 (a b) (eval-expo `(char ,a) '() b))
-
-;; (run 10 (q) (eval-expo q '() `(e r i c)))
-
-;; TODO:
-;; I'm in the middle of refactoring to make "strings" simply "lists of (char <c>)".
-;; Think about how you would apply lower to every character in a list.
-
-;; This is an interpreter for a simple Lisp.  Variables in this language are
-;; represented namelessly, using De Bruijn indices.
-;; Because it is implemented as a relation, we can run this interpreter with
-;; unknowns in any argument position.  If we place unknowns in the `expr`
-;; position, we can synthesize programs.
 (define-relation (eval-expo expr env value)
   (conde ;; NOTE: this clause order is optimized for quine generation.
-   ((fresh (c vc)
-           (== `(lower ,c) expr)          ;; expr is a to-lowercase operation
-           (eval-expo c env vc)
-           (chars-to-lowero vc value)))
-   ((fresh (c vc)
-           (== `(upper ,c) expr)          ;; expr is a to-lowercase operation
-           (eval-expo c env vc)
-           (chars-to-lowero vc value)))
-   ((fresh (c)
-           (== `(char ,c) expr)           ;; expr is a character
-           (charo value)
-           (eval-expo c env value)))
-   ((fresh (index)
-           (== `(var ,index) expr)        ;; expr is a variable
-           (lookupo index env value)))
+   ((fresh (chars)
+           (== `(s . ,chars) expr)
+           (== expr value)))
+   ((fresh (arg arg^ result)
+           (== `(lower ,arg) expr)          ;; expr is a to-lowercase operation
+           (eval-expo arg env `(s . ,arg^))
+           (chars-to-lowero arg^ result)
+           (== value `(s . ,result))))
+   ((fresh (arg arg^ idx idx^ result)
+           (== `(substro ,arg ,idx) expr)
+           (eval-expo arg env `(s . ,arg^))
+           (eval-expo idx env idx^)
+           (substro arg^ idx^ result)
+           (== value `(s . ,result))))
+   ((fresh (arg arg^ result)
+           (== `(reverseo ,arg) expr)
+           (eval-expo arg env `(s . ,arg^))
+           (reverseo arg^ result)
+           (== value `(s . ,result))))
    ((fresh (body)
            (== `(lambda ,body) expr)      ;; expr is a procedure definition
            (== `(closure ,body ,env) value)))
@@ -139,32 +110,62 @@
            (eval-expo rator env `(closure ,body ,env^))
            (eval-expo rand env arg)
            (eval-expo body `(,arg . ,env^) value)))
-   ((fresh (lst idx)
-           (== `(nth ,lst ,idx) expr)
-           (ntho lst idx value)))
-   ((fresh (a*)
-           (== `(list . ,a*) expr)        ;; expr is a list operation
-           (eval-listo a* env value)))
-   ((fresh (a d va vd)
-           (== `(cons ,a ,d) expr)        ;; expr is a cons operation
-           (== `(,va . ,vd) value)
-           (eval-expo a env va)
-           (eval-expo d env vd)))
-   ((fresh (c va vd)
-           (== `(car ,c) expr)            ;; expr is a car operation
-           (== va value)
-           (eval-expo c env `(,va . ,vd))))
-   ((fresh (c va vd)
-           (== `(cdr ,c) expr)            ;; expr is a cdr operation
-           (== vd value)
-           (eval-expo c env `(,va . ,vd))))
-   ((fresh (bits)                         ;; expr is a number
-           (== `(number . ,bits) expr)
-           (== expr value)
-           (from-zero-countero bits)))
+   ((byteo expr)
+    (== expr value))
+   ((fresh (index)
+           (== `(var ,index) expr)        ;; expr is a variable
+           (lookupo index env value)))
+   ;; ((fresh (arg arg^ result)
+   ;;         (== `(upper ,arg) expr)          ;; expr is a to-lowercase operation
+   ;;         (eval-expo arg env `(s . ,arg^))
+   ;;         (chars-to-lowero arg^ result)
+   ;;         (== value `(s . ,result))))
+   ;; ((fresh (lst idx)
+   ;;         (== `(nth ,lst ,idx) expr)
+   ;;         (ntho lst idx value)))
    ))
 
-; (run 20 (q) (eval-expo q '() 'E))
+(run 1 (q) (eval-expo `(reverseo (s A b)) '() q))
+
+(run 1 (q) (eval-expo `(substro (s b A) (1)) '() q))
+
+(run 1 (q) (eval-expo `(lower (s b A C)) '() q))
+
+(run 1 (q) (eval-expo `(lower (reverseo (s b A))) '() q))
+
+(run 1 (q) (eval-expo `(reverseo (lower (s b A))) '() q))
+
+(run 1 (q) (eval-expo `(lower (substro (s b A) (1))) '() q))
+
+(run 1 (q) (eval-expo `(reverso (substro (s b A) (1))) '() q))
+
+(run 1 (q) (eval-expo `(substro (reverseo (s A b)) (1)) '() q))
+
+(run 1 (q) (eval-expo `(reverseo (substro (s A b c d) (1 1))) '() q))
+
+(run 1 (q) (eval-expo `(reverseo (substro (s A b c d) (1 1))) '() q))
+
+(run 1 (lambda)
+     (eval-expo `(app ,lambda (s E r i c)) '() '(s c i r E))
+     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s r o l y a T))
+     )
+
+(run 1 (lambda)
+     (eval-expo `(app ,lambda (s E r i c)) '() '(s e r i c))
+     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s t a y l o r))
+     )
+
+(run 1 (lambda)
+     ;(== lambda `(lambda (reverseo (lower (var ())))))
+     (eval-expo `(app ,lambda (s E r i c)) '() '(s c i r e))
+     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s r o l y a t))
+     )
+
+(run 1 (lambda)
+     ;(== lambda `(lambda (substro (var ()) (1))))
+     (eval-expo `(app ,lambda (s E r i c)) '() '(s E))
+     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s T))
+     )
 
 ;; (run 1 (q)
 ;;      (eval-expo `(app ,q E) '() 'e)
@@ -213,6 +214,73 @@
 (define-charo (upper-charo v) (A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
                                | |
                                0 1 2 3 4 5 6 7 8 9))
+
+(define-relation (byteo b)
+  (conde
+   ((== b '()))
+   ((== b '(1)))
+   ((== b '(0 1)))
+   ((== b '(1 1)))
+   ((== b '(0 0 1)))
+   ((== b '(1 0 1)))
+   ((== b '(0 1 1)))
+   ((== b '(1 1 1)))
+   ((== b '(0 0 0 1)))
+   ((== b '(1 0 0 1)))
+   ((== b '(0 1 0 1)))
+   ((== b '(1 1 0 1)))
+   ((== b '(0 0 1 1)))
+   ((== b '(1 0 1 1)))
+   ((== b '(0 1 1 1)))
+   ((== b '(1 1 1 1)))
+   ((== b '(0 0 0 0 1)))
+   ((== b '(1 0 0 0 1)))
+   ((== b '(0 1 0 0 1)))
+   ((== b '(1 1 0 0 1)))
+   ((== b '(0 0 1 0 1)))
+   ((== b '(1 0 1 0 1)))
+   ((== b '(0 1 1 0 1)))
+   ((== b '(1 1 1 0 1)))
+   ((== b '(0 0 0 1 1)))
+   ((== b '(1 0 0 1 1)))
+   ((== b '(0 1 0 1 1)))
+   ((== b '(1 1 0 1 1)))
+   ((== b '(0 0 1 1 1)))
+   ((== b '(1 0 1 1 1)))
+   ((== b '(0 1 1 1 1)))
+   ((== b '(1 1 1 1 1)))
+   ((== b '(0 0 0 0 0 1)))
+   ((== b '(1 0 0 0 0 1)))
+   ((== b '(0 1 0 0 0 1)))
+   ((== b '(1 1 0 0 0 1)))
+   ((== b '(0 0 1 0 0 1)))
+   ((== b '(1 0 1 0 0 1)))
+   ((== b '(0 1 1 0 0 1)))
+   ((== b '(1 1 1 0 0 1)))
+   ((== b '(0 0 0 1 0 1)))
+   ((== b '(1 0 0 1 0 1)))
+   ((== b '(0 1 0 1 0 1)))
+   ((== b '(1 1 0 1 0 1)))
+   ((== b '(0 0 1 1 0 1)))
+   ((== b '(1 0 1 1 0 1)))
+   ((== b '(0 1 1 1 0 1)))
+   ((== b '(1 1 1 1 0 1)))
+   ((== b '(0 0 0 0 1 1)))
+   ((== b '(1 0 0 0 1 1)))
+   ((== b '(0 1 0 0 1 1)))
+   ((== b '(1 1 0 0 1 1)))
+   ((== b '(0 0 1 0 1 1)))
+   ((== b '(1 0 1 0 1 1)))
+   ((== b '(0 1 1 0 1 1)))
+   ((== b '(1 1 1 0 1 1)))
+   ((== b '(0 0 0 1 1 1)))
+   ((== b '(1 0 0 1 1 1)))
+   ((== b '(0 1 0 1 1 1)))
+   ((== b '(1 1 0 1 1 1)))
+   ((== b '(0 0 1 1 1 1)))
+   ((== b '(1 0 1 1 1 1)))
+   ((== b '(0 1 1 1 1 1)))
+   ((== b '(1 1 1 1 1 1)))))
 
 (define-relation (charso q)
   (conde

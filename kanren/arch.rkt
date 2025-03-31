@@ -184,11 +184,11 @@
            (stringo bd strd)))))
 
 (run 1 (q) (byte-arrayo q))
-(run 5 (q) (byte-arrayo q))
+(run 128 (q) (byte-arrayo q))
 
 (run 1 (b s)
      (fresh (r)
-            (== s `(a . ,r))
+            (== s `(C 5 . ,r))
             (stringo b s)))
 
 (run* (q) (eval-expo `(+ (1 1) (0 1)) '() q))
