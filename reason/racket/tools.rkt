@@ -40,6 +40,7 @@
  explore-context?
  explore-loc
  explore-loc-tree
+ explore-loc-context
  explore-loc?
  explore-node-choices
  explore-choice

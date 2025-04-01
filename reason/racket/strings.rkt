@@ -4,6 +4,8 @@
  "utils.rkt"
  "tools.rkt"
  "math.rkt")
+(provide
+ eval-expo)
 
 (define-relation (caro a lst val)
   (== val `(,a . ,lst)))
