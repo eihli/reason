@@ -6,12 +6,10 @@
          (prefix-in rm: racket/match)
          json
          net/zmq
-         first-order-miniKanren/microk-fo
-         first-order-miniKanren/tools
-         first-order-miniKanren/math)
-
-(define-syntax-rule (comment body ...)
-  (void))
+         "utils.rkt"
+         "microk-fo.rkt"
+         "tools.rkt"
+         "math.rkt")
 
 (define-relation (conso head tail result) (== `(,head . ,tail) result))
 

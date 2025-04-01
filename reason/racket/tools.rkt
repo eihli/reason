@@ -11,6 +11,8 @@
  pretty/state
  pretty/stream
  pretty/goal
+ pprint-choice
+ pprint-choices
 
  parallel-step-simple
  parallel-step
