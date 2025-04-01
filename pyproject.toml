@@ -1,7 +1,7 @@
 [project]
 name = "reason"
 version = "0.0.1"
-description = ""
+description = "Python-Racket interop system"
 authors = [
     {name = "Eric Ihli", email = "eihli@owoga.com"}
 ]
@@ -16,12 +16,18 @@ dependencies = [
     "numpy>=2.2.3,<3.0.0"
 ]
 
+[project.scripts]
+reason-start = "reason.interop.process:start_all"
+reason-python = "reason.python.main:main"
+reason-racket = "reason.interop.process:start_racket"
+
 [build-system]
-requires = ["poetry-core>=2.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
-[tool.poetry]
-package-mode = false
+[tool.setuptools]
+packages = ["reason"]
+include-package-data = true
 
-[tool.poetry.group.dev.dependencies]
-# Add your development dependencies here
+[tool.setuptools.package-data]
+reason = ["racket/*.rkt"]

@@ -1,37 +1,10 @@
 #lang racket
 
 (require
+ "utils.rkt"
  first-order-miniKanren/mk-syntax
  first-order-miniKanren/tools
  first-order-miniKanren/math)
-
-;; Next TODO: https://claude.ai/chat/8e4dcf40-20ce-4674-91f3-e5cbcf229e65
-;; Implement if? Let it find recursion?
-;; Or... implement more string primitives, like `map` and `nth`.
-
-(define-relation (lowero u l)
-  (conde
-   ((== u 'e) (== l 'e))
-   ((== u 't) (== l 't))
-   ((== u 'E) (== l 'e))
-   ((== u 'T) (== l 't))))
-
-(define (mapper fn)
-  (lambda (xs)
-    (cond
-      ((null? xs) '())
-      (else (cons (fn (car xs)) ((mapper fn) (cdr xs)))))))
-
-; ((mapper (lambda (x) (+ x 1))) '(1 2 3))
-; '(2 3 4)
-
-(define (dec x) (- x 1))
-
-(define (nth lst i)
-  (cond
-    ((null? lst) '())
-    ((zero? i) (car lst))
-    (else (nth (cdr lst) (dec i)))))
 
 (define-relation (caro a lst val)
   (== val `(,a . ,lst)))
@@ -45,11 +18,6 @@
            (caro car-lst cdr-lst lst)
            (minuso idx '(1) dec-i)
            (ntho cdr-lst dec-i val)))))
-
-(define (substr str idx sbst)
-  (cond
-    ((= 0 idx) (reverse sbst))
-    (else (substr (cdr str) (- idx 1) (cons (car str) sbst)))))
 
 (define-relation (reverseo xs ys)
   (reverse-accumulateo xs '() ys))
@@ -76,10 +44,13 @@
        (minuso index '(1) n-1)             ; Decrement index (index - 1)
        (substro tail n-1 suffix)))))       ; Continue with rest of string
 
-(substr '(a b c d e f g) 3 '())
+(comment
+ (run 1 (a b) (reverseo '(a b c) b))
 
-(run 1 (a b) (reverseo '(a b c) b))
-(run 1 (a b) (substro '(a b c d e f) '(1 1) b))
+ (run 1 (a b) (substro '(a b c d e f) '(1 1) b))
+ ;; => '((_.0 (a b c)))
+
+ )
 
 (define-relation (eval-expo expr env value)
   (conde ;; NOTE: this clause order is optimized for quine generation.
@@ -91,17 +62,27 @@
            (eval-expo arg env `(s . ,arg^))
            (chars-to-lowero arg^ result)
            (== value `(s . ,result))))
+   ((fresh (arg arg^ result)
+           (== `(upper ,arg) expr)          ;; expr is a to-lowercase operation
+           (eval-expo arg env `(s . ,arg^))
+           (chars-to-uppero arg^ result)
+           (== value `(s . ,result))))
    ((fresh (arg arg^ idx idx^ result)
-           (== `(substro ,arg ,idx) expr)
+           (== `(substr ,arg ,idx) expr)
            (eval-expo arg env `(s . ,arg^))
            (eval-expo idx env idx^)
            (substro arg^ idx^ result)
            (== value `(s . ,result))))
    ((fresh (arg arg^ result)
-           (== `(reverseo ,arg) expr)
+           (== `(reverse ,arg) expr)
            (eval-expo arg env `(s . ,arg^))
            (reverseo arg^ result)
            (== value `(s . ,result))))
+   ((fresh (lst idx)
+           (== `(nth ,lst ,idx) expr)
+           (ntho lst idx value)))
+   ((byteo expr)
+    (== expr value))
    ((fresh (body)
            (== `(lambda ,body) expr)      ;; expr is a procedure definition
            (== `(closure ,body ,env) value)))
@@ -110,67 +91,10 @@
            (eval-expo rator env `(closure ,body ,env^))
            (eval-expo rand env arg)
            (eval-expo body `(,arg . ,env^) value)))
-   ((byteo expr)
-    (== expr value))
    ((fresh (index)
            (== `(var ,index) expr)        ;; expr is a variable
            (lookupo index env value)))
-   ;; ((fresh (arg arg^ result)
-   ;;         (== `(upper ,arg) expr)          ;; expr is a to-lowercase operation
-   ;;         (eval-expo arg env `(s . ,arg^))
-   ;;         (chars-to-lowero arg^ result)
-   ;;         (== value `(s . ,result))))
-   ;; ((fresh (lst idx)
-   ;;         (== `(nth ,lst ,idx) expr)
-   ;;         (ntho lst idx value)))
    ))
-
-(run 1 (q) (eval-expo `(reverseo (s A b)) '() q))
-
-(run 1 (q) (eval-expo `(substro (s b A) (1)) '() q))
-
-(run 1 (q) (eval-expo `(lower (s b A C)) '() q))
-
-(run 1 (q) (eval-expo `(lower (reverseo (s b A))) '() q))
-
-(run 1 (q) (eval-expo `(reverseo (lower (s b A))) '() q))
-
-(run 1 (q) (eval-expo `(lower (substro (s b A) (1))) '() q))
-
-(run 1 (q) (eval-expo `(reverso (substro (s b A) (1))) '() q))
-
-(run 1 (q) (eval-expo `(substro (reverseo (s A b)) (1)) '() q))
-
-(run 1 (q) (eval-expo `(reverseo (substro (s A b c d) (1 1))) '() q))
-
-(run 1 (q) (eval-expo `(reverseo (substro (s A b c d) (1 1))) '() q))
-
-(run 1 (lambda)
-     (eval-expo `(app ,lambda (s E r i c)) '() '(s c i r E))
-     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s r o l y a T))
-     )
-
-(run 1 (lambda)
-     (eval-expo `(app ,lambda (s E r i c)) '() '(s e r i c))
-     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s t a y l o r))
-     )
-
-(run 1 (lambda)
-     ;(== lambda `(lambda (reverseo (lower (var ())))))
-     (eval-expo `(app ,lambda (s E r i c)) '() '(s c i r e))
-     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s r o l y a t))
-     )
-
-(run 1 (lambda)
-     ;(== lambda `(lambda (substro (var ()) (1))))
-     (eval-expo `(app ,lambda (s E r i c)) '() '(s E))
-     (eval-expo `(app ,lambda (s T a y l o r)) '() '(s T))
-     )
-
-;; (run 1 (q)
-;;      (eval-expo `(app ,q E) '() 'e)
-;;      (eval-expo `(app ,q T) '() 't))
-; '(((lambda (lower (var ())))))
 
 ;; Lookup the value a variable is bound to.
 ;; Variables are represented namelessly using relative De Bruijn indices.
@@ -195,25 +119,52 @@
        (eval-expo ea env va)
        (eval-listo ed env vd)))))
 
-(define-syntax define-charo
-  (syntax-rules ()
-    [(_ (rel-name param) (char-list ...))
-     (define-relation (rel-name param)
-       (fresh (c)
-         (conde
-          [(== param `char-list)] ...)))]))
 
-;; Usage:
-(define-charo (charo v) (a b c d e f g h i j k l m n o p q r s t u v w x y z
-                         A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
-                         | |
-                         0 1 2 3 4 5 6 7 8 9))
+(comment
+ (run 1 (q) (eval-expo `(reverse (s A b)) '() q))
 
-(run 5 (q) (charo q))
+ (run 1 (q) (eval-expo `(substr (s b A) (1)) '() q))
 
-(define-charo (upper-charo v) (A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
-                               | |
-                               0 1 2 3 4 5 6 7 8 9))
+ (run 1 (q) (eval-expo `(lower (s b A C)) '() q))
+
+ (run 1 (q) (eval-expo `(lower (reverse (s b A))) '() q))
+
+ (run 1 (q) (eval-expo `(reverse (lower (s b A))) '() q))
+
+ (run 1 (q) (eval-expo `(lower (substr (s b A) (1))) '() q))
+
+ (run 1 (q) (eval-expo `(reverse (substr (s b A) (1))) '() q))
+
+ (run 1 (q) (eval-expo `(substr (reverse (s A b)) (1)) '() q))
+
+ (run 1 (q) (eval-expo `(reverse (substr (s A b c d) (1 1))) '() q))
+
+ (run 1 (q) (eval-expo `(reverse (substr (s A b c d) (1 1))) '() q))
+
+ (run 1 (lambda)
+      (eval-expo `(app ,lambda (s E r i c)) '() '(s c i r E))
+      (eval-expo `(app ,lambda (s T a y l o r)) '() '(s r o l y a T))
+      )
+
+ (run 1 (lambda)
+      (eval-expo `(app ,lambda (s E r i c)) '() '(s e r i c))
+      (eval-expo `(app ,lambda (s T a y l o r)) '() '(s t a y l o r))
+      )
+
+ (run 1 (lambda)
+      (== lambda `(lambda (reverse (lower (var ())))))
+      (eval-expo `(app ,lambda (s E r i c)) '() '(s c i r e))
+      (eval-expo `(app ,lambda (s T a y l o r)) '() '(s r o l y a t))
+      )
+ ;; => '(((lambda (reverse (lower (var ()))))))
+
+ (run 1 (lambda)
+      ;(== lambda `(lambda (substr (var ()) (1))))
+      (eval-expo `(app ,lambda (s E r i c)) '() '(s E))
+      (eval-expo `(app ,lambda (s T a y l o r)) '() '(s T))
+      )
+ )
+
 
 (define-relation (byteo b)
   (conde
@@ -282,92 +233,80 @@
    ((== b '(0 1 1 1 1 1)))
    ((== b '(1 1 1 1 1 1)))))
 
-(define-relation (charso q)
-  (conde
-   ((fresh (c)
-      (charo c)
-      (== q `(,c))))
-   ((fresh (c cs)
-      (charo c)
-      (== q `(,c . ,cs))
-      (charso cs)))))
-
-(define-relation (stringo s)
-  (fresh (c)
-    (== s `(list . ,c))
-    (charso c)))
-
 (define (make-string s)
-  `(list . ,(map (lambda (x) `(char ,(string->symbol x))) (map string (string->list s)))))
+  `(s . ,(map (lambda (x) (string->symbol x)) (map string (string->list s)))))
 
 (make-string "Eric Ihli")
 
-(run 20 (q) (stringo q))
+(comment
+ (run 20 (q) (stringo q))
+ ;; => '(((list a)) ((list b)) ((list c)) ((list a a)) ((list d)) ((list a b)) ((list e)) ((list b a)) ((list f)) ((list g)) ((list h)) ((list b b)) ((list i)) ((list j)) ((list a c)) ((list k)) ((list l)) ((list a a a)) ((list m)) ((list n)))
+ )
 
 (define-relation (char-to-uppero a b)
   (conde
-   ((== a `(char a)) (== b `(char A)))
-   ((== a `(char b)) (== b `(char B)))
-   ((== a `(char c)) (== b `(char C)))
-   ((== a `(char d)) (== b `(char D)))
-   ((== a `(char e)) (== b `(char E)))
-   ((== a `(char f)) (== b `(char F)))
-   ((== a `(char g)) (== b `(char G)))
-   ((== a `(char h)) (== b `(char H)))
-   ((== a `(char i)) (== b `(char I)))
-   ((== a `(char j)) (== b `(char J)))
-   ((== a `(char k)) (== b `(char K)))
-   ((== a `(char l)) (== b `(char L)))
-   ((== a `(char m)) (== b `(char M)))
-   ((== a `(char n)) (== b `(char N)))
-   ((== a `(char o)) (== b `(char O)))
-   ((== a `(char p)) (== b `(char P)))
-   ((== a `(char q)) (== b `(char Q)))
-   ((== a `(char r)) (== b `(char R)))
-   ((== a `(char s)) (== b `(char S)))
-   ((== a `(char t)) (== b `(char T)))
-   ((== a `(char u)) (== b `(char U)))
-   ((== a `(char v)) (== b `(char V)))
-   ((== a `(char w)) (== b `(char W)))
-   ((== a `(char x)) (== b `(char X)))
-   ((== a `(char y)) (== b `(char Y)))
-   ((== a `(char z)) (== b `(char Z)))
-   ((== a `(char A)) (== b `(char A)))
-   ((== a `(char B)) (== b `(char B)))
-   ((== a `(char C)) (== b `(char C)))
-   ((== a `(char D)) (== b `(char D)))
-   ((== a `(char E)) (== b `(char E)))
-   ((== a `(char F)) (== b `(char F)))
-   ((== a `(char G)) (== b `(char G)))
-   ((== a `(char H)) (== b `(char H)))
-   ((== a `(char I)) (== b `(char I)))
-   ((== a `(char J)) (== b `(char J)))
-   ((== a `(char K)) (== b `(char K)))
-   ((== a `(char L)) (== b `(char L)))
-   ((== a `(char M)) (== b `(char M)))
-   ((== a `(char N)) (== b `(char N)))
-   ((== a `(char O)) (== b `(char O)))
-   ((== a `(char P)) (== b `(char P)))
-   ((== a `(char Q)) (== b `(char Q)))
-   ((== a `(char R)) (== b `(char R)))
-   ((== a `(char S)) (== b `(char S)))
-   ((== a `(char T)) (== b `(char T)))
-   ((== a `(char U)) (== b `(char U)))
-   ((== a `(char V)) (== b `(char V)))
-   ((== a `(char W)) (== b `(char W)))
-   ((== a `(char X)) (== b `(char X)))
-   ((== a `(char Y)) (== b `(char Y)))
-   ((== a `(char Z)) (== b `(char Z)))
-   ((== a `(char 0)) (== b `(char 0)))
-   ((== a `(char 1)) (== b `(char 1)))
-   ((== a `(char 2)) (== b `(char 2)))
-   ((== a `(char 3)) (== b `(char 3)))
-   ((== a `(char 4)) (== b `(char 4)))
-   ((== a `(char 5)) (== b `(char 5)))
-   ((== a `(char 6)) (== b `(char 6)))
-   ((== a `(char 7)) (== b `(char 7)))
-   ((== a `(char 8)) (== b `(char 8)))
-   ((== a `(char 9)) (== b `(char 9)))))
+   ((== a `a) (== b `A))
+   ((== a `b) (== b `B))
+   ((== a `c) (== b `C))
+   ((== a `d) (== b `D))
+   ((== a `e) (== b `E))
+   ((== a `f) (== b `F))
+   ((== a `g) (== b `G))
+   ((== a `h) (== b `H))
+   ((== a `i) (== b `I))
+   ((== a `j) (== b `J))
+   ((== a `k) (== b `K))
+   ((== a `l) (== b `L))
+   ((== a `m) (== b `M))
+   ((== a `n) (== b `N))
+   ((== a `o) (== b `O))
+   ((== a `p) (== b `P))
+   ((== a `q) (== b `Q))
+   ((== a `r) (== b `R))
+   ((== a `s) (== b `S))
+   ((== a `t) (== b `T))
+   ((== a `u) (== b `U))
+   ((== a `v) (== b `V))
+   ((== a `w) (== b `W))
+   ((== a `x) (== b `X))
+   ((== a `y) (== b `Y))
+   ((== a `z) (== b `Z))
+   ((== a `A) (== b `A))
+   ((== a `B) (== b `B))
+   ((== a `C) (== b `C))
+   ((== a `D) (== b `D))
+   ((== a `E) (== b `E))
+   ((== a `F) (== b `F))
+   ((== a `G) (== b `G))
+   ((== a `H) (== b `H))
+   ((== a `I) (== b `I))
+   ((== a `J) (== b `J))
+   ((== a `K) (== b `K))
+   ((== a `L) (== b `L))
+   ((== a `M) (== b `M))
+   ((== a `N) (== b `N))
+   ((== a `O) (== b `O))
+   ((== a `P) (== b `P))
+   ((== a `Q) (== b `Q))
+   ((== a `R) (== b `R))
+   ((== a `S) (== b `S))
+   ((== a `T) (== b `T))
+   ((== a `U) (== b `U))
+   ((== a `V) (== b `V))
+   ((== a `W) (== b `W))
+   ((== a `X) (== b `X))
+   ((== a `Y) (== b `Y))
+   ((== a `Z) (== b `Z))
+   ((== a `0) (== b `0))
+   ((== a `1) (== b `1))
+   ((== a `2) (== b `2))
+   ((== a `3) (== b `3))
+   ((== a `4) (== b `4))
+   ((== a `5) (== b `5))
+   ((== a `6) (== b `6))
+   ((== a `7) (== b `7))
+   ((== a `8) (== b `8))
+   ((== a `9) (== b `9))))
 
 (define-relation (char-to-lowero a b)
   (conde
@@ -454,27 +393,13 @@
            (char-to-lowero upper-car lower-car)
            (chars-to-lowero upper-cdr lower-cdr)))))
 
-(run 1 (a b) (chars-to-lowero '(E R I C) b))
+(comment
+ (run 1 (a b) (chars-to-lowero '(E R I C) b))
+ ;; => '((_.0 (e r i c)))
+ )
 
-(define-relation (string-to-lowero upper lower)
-  (fresh (uc lc)
-         (== upper `(list . ,uc))
-         (== lower `(list . ,lc))
-         (chars-to-lowero uc lc)))
+(comment
 
-(run 1 (q) (string-to-lowero (make-string "AbCd") q))
+ (run 100 (fn arg out) (eval-expo `(app ,fn ,arg) '() out))
 
-(make-string "Eric")
-
-(run 1 (q) (eval-expo `(lower ,(make-string "Eric")) '()  q))
-
-;; (run 1 (q)
-;;      (eval-expo `(app ,q (var ())) `((,make-string "A")) (make-string "a"))
-;;      (eval-expo `(app ,q (var ())) `((,make-string "B")) (make-string "b")))
-
-;; (run 1 (q)
-;;      (eval-expo `(app ,q (var ())) `(,(make-string "Eric")) (make-string "e"))
-;;      (eval-expo `(app ,q (var ())) `(,(make-string "Tay")) (make-string "t"))
-;;      )
-
-;; (run 1 (q) (eval-expo `(chars-to-lowero (A) ,q) '() `(a)))
+ )
