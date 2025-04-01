@@ -1,10 +1,27 @@
 #lang racket
+(require "tools.rkt")
 (provide
+ conso
+ appendo
  poso
+ minuso
+ zeroo
+ gen-addero
  <lo
  <o
- pluso)
-(require first-order-miniKanren/tools)
+ <=o
+ pluso
+ eval-expo
+ build-num
+ make-num
+ unbuild-num
+ from-zero-countero
+ from-one-countero
+ *o
+ lookupo)
+
+(define-relation (conso head tail result)
+   (== `(,head . ,tail) result))
 
 (define-relation (appendo xs ys xsys)
   (conde ((== xs '()) (== ys xsys))
@@ -14,12 +31,44 @@
             (appendo zs ys zsys)))))
 
 (define-relation (nevero x) (nevero x))
+
 (define-relation (alwayso x)
   (conde ((== #t x))
          ((alwayso x))))
+
 (define-relation (sometimeso x)
   (conde ((nevero x))
          ((alwayso x))))
+
+(define-relation (color c)
+  (conde ((== c 'red))
+         ((== c 'green))
+         ((== c 'blue))
+         ((== c 'cyan))
+         ((== c 'magenta))
+         ((== c 'yellow))
+         ((== c 'black))
+         ((== c 'white))))
+
+(define-relation (shape s)
+  (conde ((== s 'circle))
+         ((== s 'triangle))
+         ((== s 'rectangle))
+         ((== s 'pentagon))
+         ((== s 'hexagon))))
+
+(define-relation (shape-or-color sc)
+  (conde ((shape sc)) ((color sc))))
+
+(define-relation (atomo v)
+  (conde
+   ((== #t v))
+   ((== #f v))
+   ((== 'a v))
+   ((== 'b v))
+   ((== 'c v))
+   ((== '0 v))
+   ((== '1 v))))
 
 ;; This is an interpreter for a simple Lisp.  Variables in this language are
 ;; represented namelessly, using De Bruijn indices.
@@ -28,11 +77,30 @@
 ;; position, we can synthesize programs.
 (define-relation (eval-expo expr env value)
   (conde ;; NOTE: this clause order is optimized for quine generation.
+    ((fresh (n m nv mv vv)
+       (== `(* ,n ,m) expr)
+       (eval-expo n env `(number . ,nv))
+       (eval-expo m env `(number . ,mv))
+       (== value `(number . ,vv))
+       (*o nv mv vv)))
+    ((fresh (bits)
+       (== `(number . ,bits) expr)
+       (== expr value)
+       (from-zero-countero bits)))
+    ((fresh (index)
+       (== `(var ,index) expr)        ;; expr is a variable
+       (lookupo index env value)))
     ((fresh (body)
        (== `(lambda ,body) expr)      ;; expr is a procedure definition
        (== `(closure ,body ,env) value)))
+    ((fresh (rator rand arg env^ body)
+            (== `(app ,rator ,rand) expr)  ;; expr is a procedure application
+            (eval-expo rator env `(closure ,body ,env^))
+            (eval-expo rand env arg)
+            (eval-expo body `(,arg . ,env^) value)))
     ;; If this is before lambda, quoted closures become likely.
-    ((== `(quote ,value) expr))       ;; expr is a literal constant
+    ((== `(quote ,value) expr) ;; expr is a literal constant
+     (atomo value))
     ((fresh (a*)
        (== `(list . ,a*) expr)        ;; expr is a list operation
        (eval-listo a* env value)))
@@ -41,22 +109,15 @@
        (== `(,va . ,vd) value)
        (eval-expo a env va)
        (eval-expo d env vd)))
-    ((fresh (index)
-       (== `(var ,index) expr)        ;; expr is a variable
-       (lookupo index env value)))
-    ;((fresh (c va vd)
-       ;(== `(car ,c) expr)            ;; expr is a car operation
-       ;(== va value)
-       ;(eval-expo c env `(,va . ,vd))))
-    ;((fresh (c va vd)
-       ;(== `(cdr ,c) expr)            ;; expr is a cdr operation
-       ;(== vd value)
-       ;(eval-expo c env `(,va . ,vd))))
-    ((fresh (rator rand arg env^ body)
-       (== `(app ,rator ,rand) expr)  ;; expr is a procedure application
-       (eval-expo rator env `(closure ,body ,env^))
-       (eval-expo rand env arg)
-       (eval-expo body `(,arg . ,env^) value)))))
+    ((fresh (c va vd)
+       (== `(car ,c) expr)            ;; expr is a car operation
+       (== va value)
+       (eval-expo c env `(,va . ,vd))))
+    ((fresh (c va vd)
+       (== `(cdr ,c) expr)            ;; expr is a cdr operation
+       (== vd value)
+       (eval-expo c env `(,va . ,vd))))
+    ))
 
 ;; Lookup the value a variable is bound to.
 ;; Variables are represented namelessly using relative De Bruijn indices.
@@ -92,6 +153,29 @@
      (cons 0
            (build-num (quotient n 2))))
     ((zero? n) '())))
+
+(define (make-num x)
+  `(number . ,(build-num x)))
+
+(define (unbuild-num n)
+  (let loop ((n n) (r 0) (i 0))
+    (cond
+     ((null? n) r)
+     ((= 1 (car n)) (loop (cdr n) (+ r (expt 2 i)) (add1 i)))
+     (else (loop (cdr n) r (add1 i))))))
+
+(define-relation (from-one-countero q)
+  (conde
+   ((== q '(1)))
+   ((fresh (a d)
+           (== q `(,a . ,d))
+           (disj* (== a 1) (== a 0))
+           (from-one-countero d)))))
+
+(define-relation (from-zero-countero q)
+  (conde
+   ((== q '()))
+   ((from-one-countero q))))
 
 (define-relation (zeroo n)
   (== '() n))

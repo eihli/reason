@@ -2,9 +2,8 @@
 
 (require
  "utils.rkt"
- first-order-miniKanren/mk-syntax
- first-order-miniKanren/tools
- first-order-miniKanren/math)
+ "tools.rkt"
+ "math.rkt")
 
 (define-relation (caro a lst val)
   (== val `(,a . ,lst)))
