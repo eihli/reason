@@ -6,3 +6,4 @@ lit/docs/
 dist/
 .aider*
 .env
+.venv
