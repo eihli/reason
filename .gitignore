@@ -7,3 +7,4 @@ dist/
 .aider*
 .env
 .venv
+reason.egg-info
