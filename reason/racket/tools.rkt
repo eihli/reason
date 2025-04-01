@@ -37,11 +37,15 @@
 
  init-explore
  explore-context
+ explore-context-choices
+ explore-context-index
+ explore-context-parent
  explore-context?
  explore-loc
  explore-loc-tree
  explore-loc-context
  explore-loc?
+ explore-node
  explore-node-choices
  explore-choice
  explore-tree-finished?
