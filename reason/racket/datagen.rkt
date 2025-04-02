@@ -43,19 +43,23 @@
     (rm:match
      s
      ((mplus s1 s2)
-      (let ((s1 (if (mature? s1) s1 (loc-focus (step/zipper (loc '() (loc-path z) '() s1))))))
-        (cond ((not s1) (loc '() (loc-path z) '() s2))
+      (let ((s1 (if (mature? s1) s1 (loc-focus (step/zipper (loc '() z '() s1))))))
+        (cond ((not s1) (loc `(,s1) z `() s2))
               ((pair? s1)
-               (cons (loc '() z `(,(mplus s2 (cdr s1))) (car s1)) (loc `(,(car s1)) z '() (mplus s2 (cdr s1)))))
-              (else (loc `(,s1) z '() (mplus s2 s1))))))
+               (cons (loc `() z `(,s2) (car s1))
+                     (loc `(,(cdr s1)) z `(,s2) (mplus (cdr s1) s2))))
+              (else (loc `(,s2) z `(,s1) (mplus s2 s1))))))
      ((bind s g)
-      (let ((s (if (mature? s) s (loc-focus (step/zipper (loc '() (loc-path z) '() s))))))
+      (let ((s (if (mature? s) s (loc-focus (step/zipper (loc '() z '() s))))))
         (cond ((not s) #f)
               ((pair? s)
-               (step/zipper (loc '() (loc-path z) '() (mplus (pause (car s) g)
-                                                             (bind (cdr s) g)))))
-              (else (loc '() (loc-path z) '() (bind s g))))))
-     ((pause st g) (loc '() (loc-path z) '() (start st g)))
+               (step/zipper (loc
+                             `(,(pause (car s) g))
+                             z
+                             `(,(bind (cdr s) g))
+                             (mplus (pause (car s) g) (bind (cdr s) g)))))
+              (else (loc '() z '() (bind s g))))))
+     ((pause st g) (loc '() z '() (start st g)))
      (_ z))))
 
 ;; Take n solutions with their final zipper
@@ -85,7 +89,83 @@
            (appendo a2 b res)))))
 
 (walk* initial-var (state-sub (car (mature (loc-focus (cadr (run/traced 2 (a b) (appendo a b '(1 2 3 4)))))))))
+
 (walk* initial-var (state-sub (car (mature (loc-focus (caddr (run/traced 3 (a b) (appendo a b '(1 2 3 4)))))))))
 
+(caddr (run/traced 3 (a b) (appendo a b '(1 2 3 4))))
+
+(cadr (run/traced 10 (a b) (appendo a b '(1 2 3 4))))
+
+(comment
+ (loc
+  '(#s(mplus #s(bind #f #s(== #s(var b 185) (1 2 3 4))) #f))
+  (loc
+   '()
+   #f
+   '()
+   '#s(mplus
+       #s(pause
+          #s(state ((#s(var #f 0) #s(var a 184) #s(var b 185))) () () ())
+          #s(conj
+             #s(conj #s(== #s(var a 184) (#s(var a1 186) . #s(var a2 187))) #s(== (1 2 3 4) (#s(var a1 186) . #s(var res 188))))
+             #s(relate
+                #<procedure:...acket/mk-syntax.rkt:22:15>
+                (#<procedure:appendo> appendo #s(var a2 187) #s(var b 185) #s(var res 188)))))
+       #s(mplus #s(bind #f #s(== #s(var b 185) (1 2 3 4))) #f)))
+  '(#s(mplus
+       #s(bind
+          #s(mplus #s(bind #f #s(== (1 2 3 4) (#s(var a1 186) . #s(var res 188)))) #f)
+          #s(relate #<procedure:...acket/mk-syntax.rkt:22:15> (#<procedure:appendo> appendo #s(var a2 187) #s(var b 185) #s(var res 188))))
+       #s(pause
+          #s(state
+             ((#s(var res 188) 2 3 4)
+              (#s(var a1 186) . 1)
+              (#s(var a 184) #s(var a1 186) . #s(var a2 187))
+              (#s(var #f 0) #s(var a 184) #s(var b 185)))
+             ()
+             ()
+             ())
+          #s(disj
+             #s(conj #s(== #s(var a2 187) ()) #s(== #s(var b 185) #s(var res 188)))
+             #s(conj
+                #s(conj #s(== #s(var a2 187) (#s(var a1 189) . #s(var a2 190))) #s(== #s(var res 188) (#s(var a1 189) . #s(var res 191))))
+                #s(relate
+                   #<procedure:...acket/mk-syntax.rkt:22:15>
+                   (#<procedure:appendo> appendo #s(var a2 190) #s(var b 185) #s(var res 191))))))))
+  '#s(mplus
+      #s(mplus #s(bind #f #s(== #s(var b 185) (1 2 3 4))) #f)
+      #s(mplus
+         #s(bind
+            #s(mplus #s(bind #f #s(== (1 2 3 4) (#s(var a1 186) . #s(var res 188)))) #f)
+            #s(relate #<procedure:...acket/mk-syntax.rkt:22:15> (#<procedure:appendo> appendo #s(var a2 187) #s(var b 185) #s(var res 188))))
+         #s(pause
+            #s(state
+               ((#s(var res 188) 2 3 4)
+                (#s(var a1 186) . 1)
+                (#s(var a 184) #s(var a1 186) . #s(var a2 187))
+                (#s(var #f 0) #s(var a 184) #s(var b 185)))
+               ()
+               ()
+               ())
+            #s(disj
+               #s(conj #s(== #s(var a2 187) ()) #s(== #s(var b 185) #s(var res 188)))
+               #s(conj
+                  #s(conj #s(== #s(var a2 187) (#s(var a1 189) . #s(var a2 190))) #s(== #s(var res 188) (#s(var a1 189) . #s(var res 191))))
+                  #s(relate
+                     #<procedure:...acket/mk-syntax.rkt:22:15>
+                     (#<procedure:appendo> appendo #s(var a2 190) #s(var b 185) #s(var res 191))))))))))
+
+
+(let ((solution (cadddr (run/traced 10 (a b) (appendo a b '(1 2 3 4))))))
+  (let loop ((path '())
+             (solution solution))
+    (if (false? solution)
+        (reverse path)
+        (loop (cons (loc-path solution) path)
+              (loc-path solution)))))
+
+(map (lambda (x) (loc-left x)) (run/traced 10 (a b) (appendo a b '(1 2 3 4))))
+
+(map (lambda (x) (loc-right x)) (run/traced 10 (a b) (appendo a b '(1 2 3 4))))
 
 ;; (run/traced 5 (fn arg out) (eval-expo `(app ,fn ,arg) '() out))
