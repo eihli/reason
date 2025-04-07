@@ -37,42 +37,54 @@
 ;; Zipper Utilities (for later)
 ;; --------------------------------------------------
 (define (step/zip z s)
-  (match s
-    ((mplus s1 s2)
-     (let* ((ctx (zip-loc-context z))
-            (cur-idx (zip-ctx-index ctx))
-            (nxt-idx (flip cur-idx)))
-       (let* ((s1 (if (= 0 cur-idx)
-                      (if (mature? s1) s1 (cdr (step/zip z s1)))
-                      s1))
-              (s2 (if (= 1 cur-idx)
-                      (if (mature? s2) s2 (cdr (step/zip z s2)))
-                      s2)))
-         (cond
-           ((not s1) (cons (zip-loc (zip-tre s2) (zip-ctx nxt-idx `(,s1) (zip-loc-context z))) s2))
-           ((not s2) (cons (zip-loc (zip-tre s1) (zip-ctx nxt-idx `(,s2) (zip-loc-context z))) s1))
-           ((pair? s1) (cons (zip-loc (zip-tre (cons (car s1) (mplus (cdr s1) s2)))
-                                      (zip-ctx cur-idx `(,s2) (zip-loc-context z)))
-                             (cons (car s1) (mplus (cdr s1) s2))))
-           ((pair? s2) (cons (zip-loc (zip-tre (cons (car s2) (mplus s1 (cdr s2))))
-                                      (zip-ctx cur-idx `(,s1) (zip-loc-context z)))
-                             (cons (car s2) (mplus s1 (cdr s2)))))
-           (else (cons (zip-loc (zip-tre (mplus s1 s2)) (zip-ctx nxt-idx `(,(if (= 0 nxt-idx) s2 s1)) (zip-loc-context z)))
-                       (mplus s1 s2)))))))
-    ((bind s g)
-     (let* ((res (if (mature? s) (cons z s)
-                     (step/zip z s)))
-            (nxt-z (car res))
-            (nxt-s (cdr res)))
-       (cond ((not nxt-s) (cons nxt-z #f))
-             ((pair? nxt-s)
-              (step/zip nxt-z (mplus (pause (car nxt-s) g)
-                                     (bind (cdr nxt-s) g))))
-             (else (cons nxt-z (bind nxt-s g))))))
-    ((pause st g)
-     (cons (zip-loc (zip-tre (start st g)) (zip-loc-context z))
-           (start st g)))
-    (_ (cons z s))))
+  (let ((s (zip-tre-s (zip-loc-tree z))))
+    (match s
+      ((mplus s1 s2)
+       (let* ((ctx (zip-loc-context z))
+              (cur-idx (zip-ctx-index ctx))
+              (nxt-idx (flip cur-idx)))
+         (let* ((s1 (if (= 0 cur-idx)
+                        (if (mature? s1) s1 (cdr (step/zip (zip-loc
+                                                            (zip-tre s1)
+                                                            (zip-loc-context z))
+                                                           s1)))
+                        s1))
+                (s2 (if (= 1 cur-idx)
+                        (if (mature? s2) s2 (cdr (step/zip (zip-loc
+                                                            (zip-tre s2)
+                                                            (zip-loc-context z))
+                                                           s2)))
+                        s2)))
+           (cond
+             ((not s1) (cons (zip-loc (zip-tre s2) (zip-ctx nxt-idx `(,s1) (zip-loc-context z))) s2))
+             ((not s2) (cons (zip-loc (zip-tre s1) (zip-ctx nxt-idx `(,s2) (zip-loc-context z))) s1))
+             ((pair? s1) (cons (zip-loc (zip-tre (cons (car s1) (mplus (cdr s1) s2)))
+                                        (zip-ctx cur-idx `(,s2) (zip-loc-context z)))
+                               (cons (car s1) (mplus (cdr s1) s2))))
+             ((pair? s2) (cons (zip-loc (zip-tre (cons (car s2) (mplus s1 (cdr s2))))
+                                        (zip-ctx cur-idx `(,s1) (zip-loc-context z)))
+                               (cons (car s2) (mplus s1 (cdr s2)))))
+             (else (cons (zip-loc (zip-tre (mplus s1 s2))
+                                  (zip-ctx nxt-idx `(,(if (= 0 nxt-idx) s2 s1)) (zip-loc-context z)))
+                         (mplus s1 s2)))))))
+      ((bind s g)
+       (let* ((res (if (mature? s) (cons (zip-loc (zip-tre s) (zip-loc-context z)) s)
+                       (step/zip (zip-loc (zip-tre s) (zip-loc-context z)) s)))
+              (nxt-z (car res))
+              (nxt-s (cdr res)))
+         (cond ((not nxt-s) (cons nxt-z #f))
+               ((pair? nxt-s)
+                (step/zip (zip-loc (zip-tre (mplus (pause (car nxt-s) g)))
+                                   (zip-loc-context z))
+                          (mplus (pause (car nxt-s) g)
+                                 (bind (cdr nxt-s) g))))
+               (else (cons (zip-loc (zip-tre (bind nxt-s g))
+                                   (zip-loc-context z))
+                           (bind nxt-s g))))))
+      ((pause st g)
+       (cons (zip-loc (zip-tre (start st g)) (zip-loc-context z))
+             (start st g)))
+      (_ (cons z s)))))
 
 ;; --------------------------------------------------
 ;; Zipper-Aware Stream Take
@@ -99,7 +111,7 @@
 (define-syntax run/zip
   (syntax-rules ()
     ((_ n body ...)
-     (stream-take/zip n (zip-loc (query body ...) (zip-ctx 0 '() zip-TOP)) (query body ...)))))
+     (stream-take/zip n (zip-loc (zip-tre (query body ...)) (zip-ctx 0 '() zip-TOP)) (query body ...)))))
 
 (define-relation (appendo a b ab)
   (conde
@@ -124,6 +136,7 @@
 (comment
 
  (length (run/zip 100 (a b) (appendo a b '(1 2 3 4))))
+
  ;; => 5
  (zipper->path (caar (reverse (run/zip 10 (a b) (appendo a b '(1 2 3 4))))))
 
