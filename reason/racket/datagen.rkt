@@ -1,3 +1,4 @@
+
 #lang racket
 
 (require (prefix-in rm: racket/match)
@@ -7,78 +8,98 @@
          "mk-fo.rkt"
          "tools.rkt")
 
-;; This is your search-tree zipper structure
-(struct loc (left path right focus) #:transparent)
 
-;; Go up one level
-(define (loc-up z)
-  (rm:match z
-    [(loc left (loc pl pp pr pf) right focus)
-     (loc (cons focus left) pp pr pf)]
-    [_ #f]))
+;; --------------------------------------------------
+;; Zipper Structure
+;; --------------------------------------------------
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Define explore state to maintain the data held at every step
+;; when exploring
+;; https://wiki.haskell.org/Zipper
+(struct zip-ctx (index siblings parent) #:prefab)
+(struct zip-tre (s) #:prefab)
+(struct zip-loc (tree context) #:prefab)
+(define zip-TOP 'TOP)
+;; Initial zipper: ((zip-tre #f) (zip-ctx -1 '() zip-TOP))
 
-;; Go to the next sibling (redo)
-(define (loc-redo z)
-  (rm:match z
-    [(loc left path (cons r rs) focus)
-     (loc (cons focus left) path rs r)]
-    [_ #f]))
+(define (flip i) (if (= i 0) 1 0))
 
-;; Undo (back to previous sibling)
-(define (loc-undo z)
-  (match z
-    [(loc (cons l ls) path right focus)
-     (loc ls path (cons focus right) l)]
-    [_ #f]))
+(define (mature? s)
+  (or (not s) (pair? s)))
 
-;; Reconstruct the path from root to current focus
-(define (reconstruct-loc-path z)
-  (if (loc? z)
-      (cons (loc-focus z) (if (loc-path (loc-path z)) (loc-path (loc-path z)) '()))
-      '()))
+(define (mature z s)
+  (if (mature? s)
+      (cons z s)
+      (let ((result (step/zip z s)))
+        (mature (car result) (cdr result)))))
 
-;; Zipper-aware step
-(define (step/zipper z)
-  (let ((s (loc-focus z)))
-    (rm:match
-     s
-     ((mplus s1 s2)
-      (let ((s1 (if (mature? s1) s1 (loc-focus (step/zipper (loc '() z '() s1))))))
-        (cond ((not s1) (loc `(,s1) z `() s2))
-              ((pair? s1)
-               (cons (loc `() z `(,s2) (car s1))
-                     (loc `(,(cdr s1)) z `(,s2) (mplus (cdr s1) s2))))
-              (else (loc `(,s2) z `(,s1) (mplus s2 s1))))))
-     ((bind s g)
-      (let ((s (if (mature? s) s (loc-focus (step/zipper (loc '() z '() s))))))
-        (cond ((not s) #f)
-              ((pair? s)
-               (step/zipper (loc
-                             `(,(pause (car s) g))
-                             z
-                             `(,(bind (cdr s) g))
-                             (mplus (pause (car s) g) (bind (cdr s) g)))))
-              (else (loc '() z '() (bind s g))))))
-     ((pause st g) (loc '() z '() (start st g)))
-     (_ z))))
+;; --------------------------------------------------
+;; Zipper Utilities (for later)
+;; --------------------------------------------------
+(define (step/zip z s)
+  (match s
+    ((mplus s1 s2)
+     (let* ((ctx (zip-loc-context z))
+            (cur-idx (zip-ctx-index ctx))
+            (nxt-idx (flip cur-idx)))
+       (let* ((s1 (if (= 0 cur-idx)
+                      (if (mature? s1) s1 (cdr (step/zip z s1)))
+                      s1))
+              (s2 (if (= 1 cur-idx)
+                      (if (mature? s2) s2 (cdr (step/zip z s2)))
+                      s2)))
+         (cond
+           ((not s1) (cons (zip-loc (zip-tre s2) (zip-ctx nxt-idx `(,s1) (zip-loc-context z))) s2))
+           ((not s2) (cons (zip-loc (zip-tre s1) (zip-ctx nxt-idx `(,s2) (zip-loc-context z))) s1))
+           ((pair? s1) (cons (zip-loc (zip-tre (cons (car s1) (mplus (cdr s1) s2)))
+                                      (zip-ctx cur-idx `(,s2) (zip-loc-context z)))
+                             (cons (car s1) (mplus (cdr s1) s2))))
+           ((pair? s2) (cons (zip-loc (zip-tre (cons (car s2) (mplus s1 (cdr s2))))
+                                      (zip-ctx cur-idx `(,s1) (zip-loc-context z)))
+                             (cons (car s2) (mplus s1 (cdr s2)))))
+           (else (cons (zip-loc (zip-tre (mplus s1 s2)) (zip-ctx nxt-idx `(,(if (= 0 nxt-idx) s2 s1)) (zip-loc-context z)))
+                       (mplus s1 s2)))))))
+    ((bind s g)
+     (let* ((res (if (mature? s) (cons z s)
+                     (step/zip z s)))
+            (nxt-z (car res))
+            (nxt-s (cdr res)))
+       (cond ((not nxt-s) (cons nxt-z #f))
+             ((pair? nxt-s)
+              (step/zip nxt-z (mplus (pause (car nxt-s) g)
+                                     (bind (cdr nxt-s) g))))
+             (else (cons nxt-z (bind nxt-s g))))))
+    ((pause st g)
+     (cons (zip-loc (zip-tre (start st g)) (zip-loc-context z))
+           (start st g)))
+    (_ (cons z s))))
 
-;; Take n solutions with their final zipper
-(define (stream-take/traced n s)
+;; --------------------------------------------------
+;; Zipper-Aware Stream Take
+;; --------------------------------------------------
+(define (stream-take/zip n z s)
   (if (zero? n)
       '()
-      (let* ((z (step/zipper (make-initial-loc s)))
-             (res (mature (loc-focus z))))
-        (if (pair? res)
-            (cons z (stream-take/traced (- n 1) (cdr res)))
-            '()))))
+      (let ((result (mature z s)))
+        (let ((new-z (car result))
+              (new-s (cdr result)))
+          (if (pair? new-s)
+              (cons (cons new-z (car new-s))
+                    (stream-take/zip (and n (- n 1))
+                                    (zip-loc (zip-tre (cdr new-s))
+                                            (zip-ctx 0 '() (zip-loc-context new-z)))
+                                    (cdr new-s)))
+              '())))))
 
-(define (make-initial-loc s)
-  (loc '() #f '() s))
 
-(define-syntax run/traced
+;; --------------------------------------------------
+;; API: run/traced
+;; --------------------------------------------------
+
+(define-syntax run/zip
   (syntax-rules ()
     ((_ n body ...)
-     (stream-take/traced n (query body ...)))))
+     (stream-take/zip n (zip-loc (query body ...) (zip-ctx 0 '() zip-TOP)) (query body ...)))))
 
 (define-relation (appendo a b ab)
   (conde
@@ -88,84 +109,23 @@
            (== ab `(,a1 . ,res))
            (appendo a2 b res)))))
 
-(walk* initial-var (state-sub (car (mature (loc-focus (cadr (run/traced 2 (a b) (appendo a b '(1 2 3 4)))))))))
-
-(walk* initial-var (state-sub (car (mature (loc-focus (caddr (run/traced 3 (a b) (appendo a b '(1 2 3 4)))))))))
-
-(caddr (run/traced 3 (a b) (appendo a b '(1 2 3 4))))
-
-(cadr (run/traced 10 (a b) (appendo a b '(1 2 3 4))))
+;; Traverse up a zipper and collect the path of choices (0 for s1, 1 for s2)
+;; Returns a list of indices representing the path from root to current location
+(define (zipper->path z)
+  (let loop ([ctx (zip-loc-context z)]
+             [path '()])
+    (cond
+      [(eq? ctx zip-TOP) (reverse path)]  ; We've reached the top, reverse for root-to-leaf order
+      [else
+       (let ([idx (zip-ctx-index ctx)]
+             [parent (zip-ctx-parent ctx)])
+         (loop parent (cons idx path)))])))  ; Accumulate indices as we go up
 
 (comment
- (loc
-  '(#s(mplus #s(bind #f #s(== #s(var b 185) (1 2 3 4))) #f))
-  (loc
-   '()
-   #f
-   '()
-   '#s(mplus
-       #s(pause
-          #s(state ((#s(var #f 0) #s(var a 184) #s(var b 185))) () () ())
-          #s(conj
-             #s(conj #s(== #s(var a 184) (#s(var a1 186) . #s(var a2 187))) #s(== (1 2 3 4) (#s(var a1 186) . #s(var res 188))))
-             #s(relate
-                #<procedure:...acket/mk-syntax.rkt:22:15>
-                (#<procedure:appendo> appendo #s(var a2 187) #s(var b 185) #s(var res 188)))))
-       #s(mplus #s(bind #f #s(== #s(var b 185) (1 2 3 4))) #f)))
-  '(#s(mplus
-       #s(bind
-          #s(mplus #s(bind #f #s(== (1 2 3 4) (#s(var a1 186) . #s(var res 188)))) #f)
-          #s(relate #<procedure:...acket/mk-syntax.rkt:22:15> (#<procedure:appendo> appendo #s(var a2 187) #s(var b 185) #s(var res 188))))
-       #s(pause
-          #s(state
-             ((#s(var res 188) 2 3 4)
-              (#s(var a1 186) . 1)
-              (#s(var a 184) #s(var a1 186) . #s(var a2 187))
-              (#s(var #f 0) #s(var a 184) #s(var b 185)))
-             ()
-             ()
-             ())
-          #s(disj
-             #s(conj #s(== #s(var a2 187) ()) #s(== #s(var b 185) #s(var res 188)))
-             #s(conj
-                #s(conj #s(== #s(var a2 187) (#s(var a1 189) . #s(var a2 190))) #s(== #s(var res 188) (#s(var a1 189) . #s(var res 191))))
-                #s(relate
-                   #<procedure:...acket/mk-syntax.rkt:22:15>
-                   (#<procedure:appendo> appendo #s(var a2 190) #s(var b 185) #s(var res 191))))))))
-  '#s(mplus
-      #s(mplus #s(bind #f #s(== #s(var b 185) (1 2 3 4))) #f)
-      #s(mplus
-         #s(bind
-            #s(mplus #s(bind #f #s(== (1 2 3 4) (#s(var a1 186) . #s(var res 188)))) #f)
-            #s(relate #<procedure:...acket/mk-syntax.rkt:22:15> (#<procedure:appendo> appendo #s(var a2 187) #s(var b 185) #s(var res 188))))
-         #s(pause
-            #s(state
-               ((#s(var res 188) 2 3 4)
-                (#s(var a1 186) . 1)
-                (#s(var a 184) #s(var a1 186) . #s(var a2 187))
-                (#s(var #f 0) #s(var a 184) #s(var b 185)))
-               ()
-               ()
-               ())
-            #s(disj
-               #s(conj #s(== #s(var a2 187) ()) #s(== #s(var b 185) #s(var res 188)))
-               #s(conj
-                  #s(conj #s(== #s(var a2 187) (#s(var a1 189) . #s(var a2 190))) #s(== #s(var res 188) (#s(var a1 189) . #s(var res 191))))
-                  #s(relate
-                     #<procedure:...acket/mk-syntax.rkt:22:15>
-                     (#<procedure:appendo> appendo #s(var a2 190) #s(var b 185) #s(var res 191))))))))))
 
+ (length (run/zip 100 (a b) (appendo a b '(1 2 3 4))))
+ ;; => 5
+ (zipper->path (caar (reverse (run/zip 10 (a b) (appendo a b '(1 2 3 4))))))
 
-(let ((solution (cadddr (run/traced 10 (a b) (appendo a b '(1 2 3 4))))))
-  (let loop ((path '())
-             (solution solution))
-    (if (false? solution)
-        (reverse path)
-        (loop (cons (loc-path solution) path)
-              (loc-path solution)))))
-
-(map (lambda (x) (loc-left x)) (run/traced 10 (a b) (appendo a b '(1 2 3 4))))
-
-(map (lambda (x) (loc-right x)) (run/traced 10 (a b) (appendo a b '(1 2 3 4))))
-
-;; (run/traced 5 (fn arg out) (eval-expo `(app ,fn ,arg) '() out))
+ ;; => '(0 1 0 1 0 0 1 0 1 0 0 1 0 1 0 0 1 0 1 0 1 0)
+ )
