@@ -25,7 +25,7 @@
 (define (zip-ctx-index-safe ctx)
   (if (zip-ctx? ctx)
       (zip-ctx-index ctx)
-      -1))
+      0))
 
 (define (zip-ctx-siblings-safe ctx)
   (if (zip-ctx? ctx)
@@ -90,31 +90,30 @@
     (match s
       ((mplus s1 s2)
        (let* ((ctx (zip-loc-context z))
-              (cur-idx (zip-ctx-index-safe ctx))
-              (nxt-idx (flip cur-idx)))
+              (cur-idx (zip-ctx-index-safe ctx)))
          (let* ((s1 (if (= 0 cur-idx)
                         (if (mature? s1) s1 (zip-tre-s-safe
                                              (zip-loc-tree-safe
                                               (step/zip (zip-loc
                                                          (zip-tre s1)
-                                                         (zip-loc-context z))))))
+                                                         ctx)))))
                         s1))
                 (s2 (if (= 1 cur-idx)
                         (if (mature? s2) s2 (zip-tre-s-safe
                                              (zip-loc-tree-safe
                                               (step/zip (zip-loc
                                                          (zip-tre s2)
-                                                         (zip-loc-context z))))))
+                                                         ctx)))))
                         s2)))
            (cond
-             ((not s1) (zip-loc (zip-tre s2) (zip-ctx nxt-idx `(,s1) (zip-loc-context z))))
-             ((not s2) (zip-loc (zip-tre s1) (zip-ctx nxt-idx `(,s2) (zip-loc-context z))))
+             ((not s1) (zip-loc (zip-tre s2) (zip-ctx cur-idx `(,s1) ctx)))
+             ((not s2) (zip-loc (zip-tre s1) (zip-ctx cur-idx `(,s2) ctx)))
              ((pair? s1) (zip-loc (zip-tre (cons (car s1) (mplus (cdr s1) s2)))
-                                  (zip-ctx cur-idx `(,s2) (zip-loc-context z))))
+                                  (zip-ctx cur-idx `(,s2) ctx)))
              ((pair? s2) (zip-loc (zip-tre (cons (car s2) (mplus s1 (cdr s2))))
-                                  (zip-ctx cur-idx `(,s1) (zip-loc-context z))))
+                                  (zip-ctx cur-idx `(,s1) ctx)))
              (else (zip-loc (zip-tre (mplus s1 s2))
-                            (zip-ctx nxt-idx `(,(if (= 0 nxt-idx) s2 s1)) (zip-loc-context z))))))))
+                            (zip-ctx (flip cur-idx) `(,(if (= 0 (flip cur-idx)) s2 s1)) ctx)))))))
       ((bind s g)
        (let ((s (if (mature? s)
                     s
@@ -150,13 +149,22 @@
 
 
 ;; --------------------------------------------------
-;; API: run/traced
+;; API: run/zip
 ;; --------------------------------------------------
 
 (define-syntax run/zip
   (syntax-rules ()
     ((_ n body ...)
      (stream-take/zip n (zip-loc (zip-tre (query body ...)) (top-ctx))))))
+
+;; --------------------------------------------------
+;; API: run/zip/path
+;; --------------------------------------------------
+(define-syntax run/zip/path
+  (syntax-rules ()
+    ((_ path body ...)
+     (let ((z (zip-loc (zip-tre (query body ...)) (top-ctx))))
+       (step/zip/path z path)))))
 
 (define-relation (appendo a b ab)
   (conde
@@ -172,7 +180,7 @@
   (let loop ([ctx (zip-loc-context z)]
              [path '()])
     (cond
-      [(top-ctx? ctx) (reverse path)]  ; We've reached the top, reverse for root-to-leaf order
+      [(top-ctx? ctx) path]  ; We've reached the top, reverse for root-to-leaf order
       [else
        (let ([idx (zip-ctx-index-safe ctx)]
              [parent (zip-ctx-parent-safe ctx)])
@@ -180,7 +188,7 @@
 
 (comment
 
- (run/zip 100 (a b) (appendo a b '(1 2 3 4)))
+ (run/zip 1 (a b) (appendo a b '(1 2 3 4)))
 
  (map
   (lambda (z)
@@ -190,14 +198,95 @@
 
  (zipper->path (car (run/zip 10 (a b) (appendo a b '(1 2 3 4)))))
 
- ;; => '(1 0)
+ ;; => '(0 1)
  (zipper->path (cadr (run/zip 10 (a b) (appendo a b '(1 2 3 4)))))
- ;; => '(1 0 1 0 1 0)
+
+ ;; => '(0 1 0 1 0 1)
 
  ;; => '(0 1 0 1 0 0 1 0 1 0 0 1 0 1 0 0 1 0 1 0 1 0)
  (car (run/zip 10 (a b) (appendo a b '(1 2 3 4))))
 
+ ;; Demo of run/zip/path
+ ;; First, let's get a path from a regular run/zip
+ (define path-example (zipper->path (car (run/zip 10 (a b) (appendo a b '(1 2 3 4))))))
+ path-example
+ ;; => '(1)
+
+ ;; Now use that path with run/zip/path to navigate directly to the same position
+ (define z1 (run/zip/path path-example (a b) (appendo a b '(1 2 3 4))))
+ z1
+ (walk* initial-var (state-sub (zip-tre-s (zip-loc-tree z1))))
+
+ ;; Verify we got to the same position
+ (walk* initial-var (state-sub (car (zip-tre-s (zip-loc-tree z1)))))
+ ;; => '(() (1 2 3 4))
+ 
+ ;; We can also try a different path
+ (define z2 (run/zip/path '(1 0 1 0 1 0) (a b) (appendo a b '(1 2 3 4))))
+ (walk* initial-var (state-sub (car (zip-tre-s (zip-loc-tree z2)))))
+ ;; => '((1 2) (3 4))
+ 
+ ;; This demonstrates that run/zip/path allows us to navigate directly to specific positions
+ ;; in the search space without having to explore all the intermediate positions.
 
  (zip-up (cadr (run/zip 10 (a b) (appendo a b '(1 2 3 4)))))
 
  )
+
+
+(define (step/zip/path z p)
+  ;; Given a path that looks like this, for example:
+  ;; '(1 0 1 0 1 1 0)
+  ;; step through the zipper, taking the given path.
+  ;; The regular `step/zip` alternates taking the 0 or the 1 path
+  ;; in an `mplus`. But this one takes the path given by the user.
+  (if (null? p)
+      z  ; If path is empty, we've reached the destination
+      (let ((s (zip-tre-s-safe (zip-loc-tree-safe z))))
+        (match s
+          ((mplus s1 s2)
+           (let* ((path-choice (car p))  ; The next choice in our path
+                  (remaining-path (cdr p)))  ; The rest of the path
+             (let* ((s1 (if (= 0 path-choice)
+                            (if (mature? s1) s1 (zip-tre-s-safe
+                                                 (zip-loc-tree-safe
+                                                  (step/zip/path (zip-loc
+                                                                  (zip-tre s1)
+                                                                  (zip-loc-context z))
+                                                                 remaining-path))))
+                            s1))
+                    (s2 (if (= 1 path-choice)
+                            (if (mature? s2) s2 (zip-tre-s-safe
+                                                 (zip-loc-tree-safe
+                                                  (step/zip/path (zip-loc
+                                                                  (zip-tre s2)
+                                                                  (zip-loc-context z))
+                                                                 remaining-path))))
+                            s2)))
+               (cond
+                 ((not s1) (zip-loc (zip-tre s2) (zip-ctx path-choice `(,s1) (zip-loc-context z))))
+                 ((not s2) (zip-loc (zip-tre s1) (zip-ctx path-choice `(,s2) (zip-loc-context z))))
+                 ((pair? s1) (zip-loc (zip-tre (cons (car s1) (mplus (cdr s1) s2)))
+                                      (zip-ctx path-choice `(,s2) (zip-loc-context z))))
+                 ((pair? s2) (zip-loc (zip-tre (cons (car s2) (mplus s1 (cdr s2))))
+                                      (zip-ctx path-choice `(,s1) (zip-loc-context z))))
+                 (else (zip-loc (zip-tre (mplus s1 s2))
+                                (zip-ctx path-choice `(,(if (= 0 path-choice) s2 s1)) (zip-loc-context z))))))))
+          ((bind s g)
+           (let ((s (if (mature? s)
+                        s
+                        (zip-tre-s-safe
+                         (zip-loc-tree-safe
+                          (mature
+                           (zip-loc (zip-tre s) (zip-loc-context z))))))))
+             (cond ((not s) #f)
+                   ((pair? s)
+                    (step/zip/path (zip-loc (zip-tre (mplus (pause (car s) g)
+                                                            (bind (cdr s) g)))
+                                            (zip-loc-context z))
+                                   p))
+                   (else (zip-loc (zip-tre (bind s g))
+                                  (zip-loc-context z))))))
+          ((pause st g)
+           (zip-loc (zip-tre (start st g)) (zip-loc-context z)))
+          (_ z)))))
